@@ -55,8 +55,23 @@ export class GitRepo {
     await this.git(['add', '-A']);
   }
 
+  /** Stages only the given paths — unlike addAll(), never pulls in unrelated working-tree changes
+   * a developer may have in progress. Used for Trackwright's own bookkeeping commits (config,
+   * ticket files), which must never sweep up project content that isn't theirs to commit. */
+  async addPaths(paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) return;
+    await this.git(['add', '--', ...paths]);
+  }
+
   async commit(message: string): Promise<void> {
     await this.git(['commit', '-m', message]);
+  }
+
+  /** True if any of the given paths have staged or unstaged changes (including being untracked). */
+  async hasChangesIn(paths: readonly string[]): Promise<boolean> {
+    if (paths.length === 0) return false;
+    const status = await this.git(['status', '--porcelain', '--', ...paths]);
+    return status.length > 0;
   }
 
   /** Is `cwd` actually inside a git working tree at all? Not to be confused with "no uncommitted

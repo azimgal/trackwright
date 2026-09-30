@@ -4,6 +4,7 @@ import { TicketStore } from '../../tickets/store.js';
 import { newTicket } from '../../tickets/template.js';
 import type { Discipline, FlowMode, Specialization } from '../../workflow/stages.js';
 import { DISCIPLINES, FLOW_MODES, SPECIALIZATIONS } from '../../workflow/stages.js';
+import { commitBookkeeping } from './init.js';
 
 export interface TicketCreateOptions {
   title: string;
@@ -53,5 +54,11 @@ export async function runTicketCreate(projectRoot: string, options: TicketCreate
   });
 
   const saved = await store.save(ticket);
+  // store.save() always returns filePath set (it defaults to a computed path internally when
+  // absent), but the Ticket type itself declares it optional for parsed-from-string cases —
+  // fail loudly rather than silently skipping the bookkeeping commit if that ever stops holding.
+  if (!saved.filePath) throw new Error('TicketStore.save() did not return a filePath');
+  const relativePath = path.relative(projectRoot, saved.filePath).split(path.sep).join('/');
+  await commitBookkeeping(projectRoot, [relativePath], `chore(trackwright): create ticket ${saved.frontmatter.id}`);
   return `Created ${saved.frontmatter.id} at ${saved.filePath}`;
 }
