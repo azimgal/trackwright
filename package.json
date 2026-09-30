@@ -4,6 +4,15 @@
   "description": "A Claude-first orchestration wrapper that moves tickets through a declarative development lifecycle (Planning -> ... -> Awaiting Merge -> Done), with independent verification and machine-enforced gates.",
   "type": "module",
   "license": "Apache-2.0",
+  "author": "Trackwright contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/azimgal/trackwright.git"
+  },
+  "bugs": {
+    "url": "https://github.com/azimgal/trackwright/issues"
+  },
+  "homepage": "https://github.com/azimgal/trackwright#readme",
   "bin": {
     "trackwright": "./dist/cli/index.js",
     "tw": "./dist/cli/index.js"
