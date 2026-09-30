@@ -85,6 +85,13 @@ npm run build
 node dist/cli/index.js --help
 ```
 
+To verify the real (non-mock) Claude Code integration on your machine — requires `claude` installed
+and authenticated:
+
+```bash
+node scripts/real-claude-smoketest.mjs
+```
+
 ## Current MVP capabilities
 
 - `trackwright init`, `ticket create`, `ticket list`, `ticket show`, `ticket waive`, `run`.

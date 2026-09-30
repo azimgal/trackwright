@@ -136,7 +136,15 @@ export class ClaudeCliRunner implements ClaudeRunner {
       invocation.permissionMode,
       '--add-dir',
       invocation.cwd,
-      '--append-system-prompt',
+      // Full replacement, not --append-system-prompt: verified empirically (see
+      // docs/roadmap.md / the real Claude smoke test) that appending to Claude Code's default
+      // interactive-assistant system prompt is not reliably strong enough to make it skip asking
+      // a clarifying question instead of returning bare JSON — these are one-shot, non-interactive
+      // structured-output agent calls, not an interactive coding session, so the default framing
+      // is actively counterproductive here. This does not weaken tool-permission enforcement:
+      // --allowedTools/--disallowedTools are a separate, independently-enforced mechanism, not
+      // part of the system prompt text.
+      '--system-prompt',
       invocation.systemPrompt,
     ];
     if (invocation.allowedTools.length > 0) {
@@ -157,6 +165,15 @@ export class ClaudeCliRunner implements ClaudeRunner {
         cwd: invocation.cwd,
         timeout: invocation.timeoutMs,
         windowsHide: true,
+        // Windows-first-class requirement: a global npm binary like `claude` resolves to a
+        // `.cmd` shim, which Node's spawn() cannot exec directly without a shell (ENOENT
+        // otherwise, even though the same name resolves fine from an interactive shell). Node
+        // itself warns that args are not fully escaped under shell:true — the trust boundary
+        // that makes this acceptable here is that every argv entry passed to buildArgs() is
+        // either this process's own hardcoded template text (model name, agent system prompt)
+        // or a filesystem path (cwd) never ticket/ user content. Ticket and diff content only
+        // ever travels over stdin (see the prompt write below), never as an argv element.
+        shell: process.platform === 'win32',
       });
 
       let stdout = '';
@@ -176,7 +193,14 @@ export class ClaudeCliRunner implements ClaudeRunner {
         resolve({ stdout, stderr: stderr + (code !== 0 && !timedOut ? `\n(exit code ${code})` : ''), timedOut });
       });
 
-      child.stdin.write(invocation.prompt);
+      // Empirically, an instruction to "respond with only JSON" placed solely in the system
+      // prompt is not reliably followed — observed real invocations sometimes asked a
+      // clarifying question instead (see the real-Claude smoke test in scripts/, and the final
+      // report's verification notes). Repeating a short, concrete reminder at the very end of
+      // the task prompt itself (closest to where generation starts) measurably improves
+      // compliance. This is additive to, not a replacement for, the system prompt's contract.
+      const finalPrompt = `${invocation.prompt}\n\nRespond now with ONLY the JSON object described above. No questions, no markdown fences, no other text.`;
+      child.stdin.write(finalPrompt);
       child.stdin.end();
     });
   }

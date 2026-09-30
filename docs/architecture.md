@@ -73,6 +73,20 @@ ticket's Requirements/Acceptance Criteria/Definition of Done and the final diff 
 `ClaudeRunner` wraps: process spawn, timeout, structured JSON parsing/validation, retry, and failure
 classification. See `src/claude/runner.ts`.
 
+**Two implementation details learned empirically, not assumed:**
+
+- On Windows, the global `claude` binary is an npm `.cmd` shim — `child_process.spawn('claude', ...)`
+  cannot exec it without `shell: true` (it fails with `ENOENT` otherwise, even though the same name
+  resolves fine from an interactive shell). See the comment in `runner.ts`'s `runProcess` for the
+  trust-boundary reasoning (only hardcoded/filesystem-derived text ever reaches argv; ticket/diff
+  content always travels over stdin).
+- Passing the JSON-output contract only in `--system-prompt` is not reliably followed — real
+  invocations sometimes answered with a clarifying question instead of JSON. Every agent's task
+  prompt (not just its system prompt) restates the exact JSON shape expected, concretely, right
+  where generation starts — see `agents/registry.ts`'s `outputContract()` and how each
+  `buildTaskPrompt()` uses it, and `runner.ts`'s trailing reminder appended to every prompt. Verify
+  this still holds for your own Claude Code version with `node scripts/real-claude-smoketest.mjs`.
+
 ### Discipline routing
 
 Tickets are classified by `discipline` (`design` | `development` | `infrastructure`) and, for
