@@ -124,7 +124,14 @@ function implementer(name: string, specializationHint: string, model: string): A
     ],
     canWriteCode: true,
     canChangeTicketState: false,
-    permissionMode: 'acceptEdits',
+    // 'acceptEdits' only auto-accepts Write/Edit — Bash tool calls still hit an interactive
+    // permission prompt even when 'Bash' is in allowedTools, and in this headless -p invocation
+    // there is no host to answer that prompt, so it is silently denied. Found via real dogfooding:
+    // the implementer could neither run its own test command nor `git commit`, even after being
+    // explicitly instructed to. Every other agent in this registry already uses 'dontAsk', which
+    // auto-approves anything within allowedTools/disallowedTools without ever prompting — the
+    // actual safety boundary here is the disallowedTools list above, not the permission mode.
+    permissionMode: 'dontAsk',
     validOutcomes: ['SUCCESS', 'RETRYABLE_FAILURE', 'BLOCKED', 'NEEDS_REPLAN', 'SYSTEM_ERROR'],
     buildSystemPrompt() {
       return `You are the ${specializationHint} implementation agent. You implement exactly what this
