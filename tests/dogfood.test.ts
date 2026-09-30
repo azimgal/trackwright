@@ -20,7 +20,10 @@ beforeAll(async () => {
   projectRoot = await mkdtemp(path.join(tmpdir(), 'trackwright-dogfood-'));
   await cp(FIXTURE, projectRoot, { recursive: true });
   const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
-  await git(['init', '-q']);
+  // -b dev: Trackwright's git safety refuses to start work directly on a protected branch
+  // (main/master, see git/safety.ts) — same as it would on a real project, where development
+  // happens off a non-protected default branch, not directly on master.
+  await git(['init', '-q', '-b', 'dev']);
   await git(['config', 'user.email', 'dogfood@example.com']);
   await git(['config', 'user.name', 'Dogfood']);
   await git(['add', '-A']);

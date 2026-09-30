@@ -114,9 +114,16 @@ export function implementerAgentsFor(ticket: Ticket): string[] {
   return [...names];
 }
 
+/**
+ * `design_status` is only an authoritative override once something has actually set it past its
+ * initial value (see tickets/template.ts, every new ticket starts at "not-required"). "required",
+ * "synced", and "stale" all mean a design gate applies (an explicit decision was made, or the
+ * gate previously ran); the default "not-required" is not itself a decision — it falls through to
+ * the routing table so a secondary "design" discipline still forces the gate even though no one
+ * has explicitly flipped design_status yet.
+ */
 export function requiresDesignGate(ticket: Ticket): boolean {
-  if (ticket.frontmatter.design_status === 'required') return true;
-  if (ticket.frontmatter.design_status === 'not-required') return false;
+  if (ticket.frontmatter.design_status !== 'not-required') return true;
   const primary = primaryRouting(ticket);
   const secondary = secondaryRoutings(ticket);
   return primary.requiresDesignGateByDefault || secondary.some((r) => r.requiresDesignGateByDefault);

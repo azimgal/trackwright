@@ -41,18 +41,15 @@ export const ticketFrontmatterSchema = z
   .object({
     id: ticketIdSchema,
     title: z.string().min(1, 'title cannot be empty'),
-    status: z.enum(STATUSES as unknown as [string, ...string[]]),
-    stage: z
-      .union([z.enum(STAGES as unknown as [string, ...string[]]), z.null()])
-      .default(null),
-    flow: z.enum(FLOW_MODES as unknown as [string, ...string[]]).default('standard'),
-    discipline: z.enum(DISCIPLINES as unknown as [string, ...string[]]),
-    specialization: z
-      .union([z.enum(SPECIALIZATIONS as unknown as [string, ...string[]]), z.null()])
-      .default(null),
-    secondary_disciplines: z
-      .array(z.enum(DISCIPLINES as unknown as [string, ...string[]]))
-      .default([]),
+    // z.enum() accepts a readonly string-literal tuple directly and infers the exact literal
+    // union — casting these to `[string, ...string[]]` (as an earlier version of this file did)
+    // would silently widen the inferred TypeScript type to plain `string` everywhere downstream.
+    status: z.enum(STATUSES),
+    stage: z.union([z.enum(STAGES), z.null()]).default(null),
+    flow: z.enum(FLOW_MODES).default('standard'),
+    discipline: z.enum(DISCIPLINES),
+    specialization: z.union([z.enum(SPECIALIZATIONS), z.null()]).default(null),
+    secondary_disciplines: z.array(z.enum(DISCIPLINES)).default([]),
     dependencies: z.array(ticketIdSchema).default([]),
     design_status: z
       .enum(['not-required', 'required', 'synced', 'stale'])

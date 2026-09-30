@@ -134,10 +134,12 @@ export class IllegalTransitionError extends Error {
 
 /**
  * Resolve the next stage for a (stage, outcome) pair, or throw IllegalTransitionError if the
- * table does not define one. CANCELLED/SYSTEM_ERROR are intentionally excluded here — the engine
- * handles those as cross-cutting concerns before ever consulting this function.
+ * table does not define one. No stage's table defines CANCELLED or SYSTEM_ERROR — the engine
+ * (workflow/engine.ts, resolveNextStage) catches the resulting IllegalTransitionError for exactly
+ * those two outcomes and self-loops, since they are cross-cutting safety fallbacks, not
+ * stage-specific semantics any table author should have to declare by hand everywhere.
  */
-export function nextStage(stage: Stage, outcome: Exclude<RunOutcome, 'CANCELLED' | 'SYSTEM_ERROR'>): Stage {
+export function nextStage(stage: Stage, outcome: RunOutcome): Stage {
   const definition = STAGE_DEFINITIONS[stage];
   const next = definition.onOutcome[outcome];
   if (!next) {

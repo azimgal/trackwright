@@ -8,12 +8,11 @@ import {
 } from '../policies/routing.js';
 import type { Ticket } from '../tickets/schema.js';
 import type { TicketStore } from '../tickets/store.js';
-import { withSection } from '../tickets/serializer.js';
 import type { ClaudeRunner, AgentInvocation, AgentResult } from '../claude/types.js';
 import type { EvidenceStore } from '../evidence/store.js';
 import type { GitRepo } from '../git/repo.js';
 import type { ProjectConfig } from '../config/schema.js';
-import { nextStage, runnerFor, type RunnerKind } from './state-machine.js';
+import { nextStage, runnerFor, IllegalTransitionError } from './state-machine.js';
 import type { RunOutcome } from './outcomes.js';
 import { RUN_OUTCOMES, type FailureOutcome } from './outcomes.js';
 import type { Stage } from './stages.js';
@@ -156,7 +155,7 @@ export class WorkflowEngine {
       costUsd: result.costUsd,
     });
 
-    const toStage = result.outcome === 'CANCELLED' ? stage : nextStage(stage, result.outcome as Exclude<RunOutcome, 'CANCELLED'>);
+    const toStage = this.resolveNextStage(stage, result.outcome);
 
     let sections = ticket.sections;
     for (const [section, content] of Object.entries(this.sectionUpdatesFor(stage, result))) {
@@ -193,7 +192,7 @@ export class WorkflowEngine {
    * ticket is the source of truth." Only outcome SUCCESS writes sections; a failed run's
    * half-formed `data` is not persisted into the ticket body.
    */
-  private sectionUpdatesFor(stage: Stage, result: AgentResult): Partial<Record<string, string>> {
+  private sectionUpdatesFor(stage: Stage, result: AgentResult): Record<string, string> {
     if (result.outcome !== 'SUCCESS') return {};
     const data = result.data as Record<string, string | undefined>;
     switch (stage) {
@@ -209,6 +208,26 @@ export class WorkflowEngine {
         return data.reasoning ? { 'Verification evidence': data.reasoning } : {};
       default:
         return {};
+    }
+  }
+
+  /**
+   * CANCELLED and the two safety-fallback outcomes (BLOCKED synthesized by the retry-ceiling
+   * check, SYSTEM_ERROR from an unhandled exception or an invalid agent response) must always
+   * have *some* legal next stage, even for a stage whose table entry doesn't explicitly declare
+   * one — not every stage lists BLOCKED/SYSTEM_ERROR, and it would be wrong to make the engine
+   * crash on exactly the outcomes meant to fail things closed. Self-loop is the safe default:
+   * stay put, stop advancing, wait for a human (see AWAITING_HUMAN_OUTCOMES in run()).
+   */
+  private resolveNextStage(stage: Stage, outcome: RunOutcome): Stage {
+    if (outcome === 'CANCELLED') return stage;
+    try {
+      return nextStage(stage, outcome);
+    } catch (err) {
+      if (err instanceof IllegalTransitionError && (outcome === 'BLOCKED' || outcome === 'SYSTEM_ERROR')) {
+        return stage;
+      }
+      throw err;
     }
   }
 
