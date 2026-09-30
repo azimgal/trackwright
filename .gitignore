@@ -9,6 +9,9 @@ coverage/
 # Claude Code / oh-my-claudecode session-local state, not part of this project
 .omc/
 
+# ad hoc debugging scratch files, never part of the product
+scratchpad/
+
 # per-project runtime state created by `trackwright init`
 # (fixtures under tests/fixtures commit their own .trackwright/ on purpose)
 /.trackwright/evidence/
