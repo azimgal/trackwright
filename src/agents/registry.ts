@@ -25,23 +25,42 @@ export interface AgentDefinition {
 }
 
 /**
- * Every agent prompt ends with this exact instruction, because ClaudeCliRunner parses
- * `envelope.result` as JSON matching this shape (see runner.ts, parseAgentPayload). Keeping the
- * contract text in one place means every agent stays consistent if the contract ever changes.
+ * General framing in the system prompt. The CONCRETE shape (with "outcome" and "summary" as
+ * literal, visible top-level keys next to a real example of this agent's "data") belongs in the
+ * task prompt instead — see concreteEnvelopeExample below. Found necessary during real
+ * dogfooding: an abstract schema description in the system prompt, separate from a task prompt
+ * that only describes the "data" fields in isolation, measurably let the model's attention drift
+ * to producing `{"data": {...}}` alone and dropping the "outcome"/"summary" wrapper entirely —
+ * observed 3/3 times on a real planner prompt with several substantial `data` fields, even after
+ * being told about the previous attempt's failure (see engine.ts, previousFailureNote). One
+ * unified, concrete example is measurably stickier than two abstract, separately-stated parts.
  */
 function outputContract(outcomes: readonly RunOutcome[]): string {
   return `
-Respond with ONLY a single JSON object, no markdown fences, no prose before or after it, matching:
+You must respond with ONLY a single JSON object, no markdown fences, no prose before or after it.
+The exact shape — including "outcome" and "summary" as literal top-level keys — is given as a
+concrete example at the end of your task instructions. Never respond with only the "data" object;
+"outcome" and "summary" are required siblings of "data", not optional.
 
-{
-  "outcome": one of ${JSON.stringify(outcomes)},
-  "summary": "one sentence, human-readable",
-  "data": { ...agent-specific structured fields... },
-  "failureReason": "required if outcome is not SUCCESS, otherwise omit"
+Valid values for "outcome": ${JSON.stringify(outcomes)}.
+If you are uncertain, choose the outcome that fails closed (blocks progress) rather than the one
+that lets the ticket advance. Never invent an outcome outside this list.`;
 }
 
-If you are uncertain, choose the outcome that fails closed (blocks progress) rather than the one
-that lets the ticket advance. Never invent an outcome outside the list above.`;
+/**
+ * A concrete, fillable JSON template — the exact text every buildTaskPrompt ends with. Agents
+ * pass their own example `data` shape; the "outcome"/"summary" wrapper is always shown literally
+ * so the model has one single, concrete target to reproduce, not an abstraction to reconstruct
+ * from two separate descriptions.
+ */
+function concreteEnvelopeExample(exampleData: Record<string, string>, alternateOutcome?: RunOutcome): string {
+  const example = JSON.stringify({ outcome: 'SUCCESS', summary: '...', data: exampleData }, null, 2);
+  const alt = alternateOutcome
+    ? `\n\nIf something is genuinely ambiguous, use "outcome": "${alternateOutcome}" instead, and mark ` +
+      `the ambiguous part inline using "[NEEDS CLARIFICATION: ...]" within the relevant data field.`
+    : '';
+  return `\nRespond with exactly this JSON shape (fill in the "..." parts with your real content; keep ` +
+    `"outcome" and "summary" as actual top-level keys, not just "data"):\n\n${example}${alt}`;
 }
 
 function ticketSection(ticket: Ticket, name: string): string {
@@ -76,9 +95,17 @@ NEEDS_CLARIFICATION.` + outputContract(this.validOutcomes);
 ${ticketSection(ctx.ticket, 'Context')}
 
 Produce Requirements, Acceptance Criteria, a Definition of Done, a Plan, and Tasks for this
-ticket. Put the full text of each in "data" as { "requirements": "...", "acceptanceCriteria":
-"...", "definitionOfDone": "...", "plan": "...", "tasks": "..." }. All five fields are required —
-this ticket cannot leave planning without them.`;
+ticket. All five fields are required — this ticket cannot leave planning without them.
+${concreteEnvelopeExample(
+  {
+    requirements: 'WHEN ... THE SYSTEM SHALL ... (EARS style, one line per requirement)',
+    acceptanceCriteria: 'a testable, observable list of what "done" looks like',
+    definitionOfDone: 'the concrete checklist this ticket must satisfy to be accepted',
+    plan: 'a short, ordered plan for implementing this',
+    tasks: 'a short, ordered task list derived from the plan',
+  },
+  'NEEDS_CLARIFICATION',
+)}`;
   },
 };
 
@@ -117,7 +144,11 @@ ${ticketSection(ctx.ticket, 'Acceptance Criteria')}
 ## Plan
 ${ticketSection(ctx.ticket, 'Plan')}
 
-Implement this. Report what you changed in "data": { "filesChanged": [...], "notes": "..." }.`;
+Implement this.
+${concreteEnvelopeExample({
+  filesChanged: 'comma-separated list of file paths you changed',
+  notes: 'a short note on what you did and any deviations from the plan',
+})}`;
     },
   };
 }
@@ -144,7 +175,8 @@ implementation.` + outputContract(this.validOutcomes);
     return `Ticket ${ctx.ticket.frontmatter.id}: ${ctx.ticket.frontmatter.title}
 
 Review the current diff in this repository (\`git diff\` against the base branch) for quality,
-architecture, security, and regressions. Report findings in "data": { "findings": [...] }.`;
+architecture, security, and regressions.
+${concreteEnvelopeExample({ findings: 'a short list of findings, or "none" if the diff is clean' })}`;
   },
 };
 
@@ -198,7 +230,41 @@ ${ctx.extra?.diff ?? '(no diff provided)'}
 ## Test evidence
 ${ctx.extra?.testEvidence ?? '(no test evidence provided)'}
 
-Judge only against the above. Report reasoning in "data": { "reasoning": "..." }.`;
+Judge only against the above.
+${concreteEnvelopeExample({ reasoning: 'your reasoning for the outcome you chose' })}`;
+  },
+};
+
+const DESIGN_GATE_AGENT: AgentDefinition = {
+  name: 'design-gate-agent',
+  role: 'Only called when deterministic rules (design/gate.ts) cannot decide — judges whether a ticket is design-sensitive.',
+  model: 'haiku',
+  allowedTools: ['Read', 'Grep', 'Glob'],
+  disallowedTools: ['Write', 'Edit', 'Bash'],
+  forbiddenActions: ['Editing any file', 'Deciding this for a ticket the deterministic rules already resolved'],
+  canWriteCode: false,
+  canChangeTicketState: false,
+  permissionMode: 'dontAsk',
+  validOutcomes: ['SUCCESS', 'SYSTEM_ERROR'],
+  buildSystemPrompt() {
+    return `You are called only for tickets a deterministic rule set could not classify. Decide
+whether this ticket's work is design-sensitive: does it touch anything a user would see or
+interact with visually (UI markup, styling, layout, visual components), as opposed to purely
+backend/infra/data logic with no visual surface? If you are genuinely unsure, fail closed: say it
+IS design-sensitive (data.designRequired: true) rather than risk silently skipping a needed design
+review — a false "not required" is worse than an unnecessary design gate.` + outputContract(this.validOutcomes);
+  },
+  buildTaskPrompt(ctx) {
+    return `Ticket ${ctx.ticket.frontmatter.id}: ${ctx.ticket.frontmatter.title}
+
+## Context
+${ticketSection(ctx.ticket, 'Context')}
+
+## Requirements
+${ticketSection(ctx.ticket, 'Requirements')}
+
+Decide design-sensitivity.
+${concreteEnvelopeExample({ designRequired: 'true or false (as a real boolean, not a string)', reasoning: '...' })}`;
   },
 };
 
@@ -210,6 +276,7 @@ export const AGENTS: Readonly<Record<string, AgentDefinition>> = {
   'implementer.infrastructure': implementer('implementer.infrastructure', 'infrastructure', 'sonnet'),
   'code-reviewer': CODE_REVIEWER,
   'verification-agent': VERIFICATION_AGENT,
+  'design-gate-agent': DESIGN_GATE_AGENT,
 };
 
 export class UnknownAgentError extends Error {
