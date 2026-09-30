@@ -114,7 +114,14 @@ function implementer(name: string, specializationHint: string, model: string): A
     name,
     role: `Writes the ${specializationHint} half of a ticket's implementation.`,
     model,
-    allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash'],
+    // Bare 'Bash' does NOT get pre-approved without a prompt under either 'acceptEdits' or
+    // 'dontAsk' in this headless -p invocation (no host to answer a prompt, so it's silently
+    // denied) — confirmed empirically via a standalone repro. Only a scoped pattern like
+    // 'Bash(git commit*)' is treated as pre-authorized. The implementer's only load-bearing Bash
+    // need is committing its own work (see the system prompt below), so that's all it gets;
+    // running the project's own tests/build is deliberately not in scope here — the dedicated
+    // Testing stage runs those deterministically via Trackwright's own process spawn regardless.
+    allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash(git add*)', 'Bash(git commit*)'],
     disallowedTools: ['Bash(git push*)', 'Bash(git reset --hard*)', 'Bash(git clean*)'],
     forbiddenActions: [
       'Pushing to any remote branch',
@@ -124,20 +131,21 @@ function implementer(name: string, specializationHint: string, model: string): A
     ],
     canWriteCode: true,
     canChangeTicketState: false,
-    // 'acceptEdits' only auto-accepts Write/Edit — Bash tool calls still hit an interactive
-    // permission prompt even when 'Bash' is in allowedTools, and in this headless -p invocation
-    // there is no host to answer that prompt, so it is silently denied. Found via real dogfooding:
-    // the implementer could neither run its own test command nor `git commit`, even after being
-    // explicitly instructed to. Every other agent in this registry already uses 'dontAsk', which
-    // auto-approves anything within allowedTools/disallowedTools without ever prompting — the
-    // actual safety boundary here is the disallowedTools list above, not the permission mode.
-    permissionMode: 'dontAsk',
+    // 'acceptEdits' auto-accepts Write/Edit tool calls by mode-specific behavior; Bash calls are
+    // pre-authorized separately via the scoped allowedTools patterns above, not by the mode.
+    // Found via real dogfooding: a bare 'Bash' entry under either 'acceptEdits' or 'dontAsk' left
+    // the implementer unable to actually run `git commit`, silently defeating the instruction
+    // below to commit its work — verified fixed via a standalone repro (scoped patterns +
+    // acceptEdits: commit succeeds with zero permission_denials; a disallowed pattern like
+    // 'git push' is still correctly denied even chained in a compound command).
+    permissionMode: 'acceptEdits',
     validOutcomes: ['SUCCESS', 'RETRYABLE_FAILURE', 'BLOCKED', 'NEEDS_REPLAN', 'SYSTEM_ERROR'],
     buildSystemPrompt() {
       return `You are the ${specializationHint} implementation agent. You implement exactly what this
 ticket's Requirements, Acceptance Criteria, and Plan describe — nothing more, nothing less. You may
-read, write, and edit files, and run build/test commands, but you never push, force-push, or touch
-git history destructively, and you never merge or approve anything.
+read, write, and edit files, but you cannot run test or build commands yourself (a dedicated Testing
+stage runs those after you); you never push, force-push, or touch git history destructively, and you
+never merge or approve anything.
 
 You MUST commit your changes (\`git add\` the specific files you changed, then \`git commit\`) before
 you finish, with a commit message referencing this ticket's id. Later stages (code review, testing,
