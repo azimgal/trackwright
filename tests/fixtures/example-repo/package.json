@@ -1,0 +1,12 @@
+{
+  "name": "trackwright-example-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "description": "A tiny fixture project used by Trackwright's dogfood test — not a real application.",
+  "scripts": {
+    "lint": "node -e \"process.exit(0)\"",
+    "typecheck": "node -e \"process.exit(0)\"",
+    "test": "node -e \"process.exit(0)\"",
+    "build": "node -e \"process.exit(0)\""
+  }
+}

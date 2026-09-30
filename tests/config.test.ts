@@ -1,0 +1,58 @@
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { initConfig, isInitialized, loadConfig, ConfigNotFoundError, configPath } from '../src/config/loader.js';
+import { runInit } from '../src/cli/commands/init.js';
+
+let dir: string;
+
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), 'trackwright-config-'));
+});
+
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+describe('config init/load', () => {
+  it('is not initialized in a fresh directory', () => {
+    expect(isInitialized(dir)).toBe(false);
+  });
+
+  it('throws ConfigNotFoundError when loading before init', async () => {
+    await expect(loadConfig(dir)).rejects.toThrow(ConfigNotFoundError);
+  });
+
+  it('creates a config with the given prefix on init', async () => {
+    const config = await initConfig(dir, 'TW');
+    expect(config.ticketPrefix).toBe('TW');
+    expect(isInitialized(dir)).toBe(true);
+  });
+
+  it('init is idempotent and does not clobber a customized config', async () => {
+    await initConfig(dir, 'TW');
+    const loaded = await loadConfig(dir);
+    const customized = { ...loaded, retryCeiling: 7 };
+    const yaml = await import('js-yaml');
+    await writeFile(configPath(dir), yaml.default.dump(customized), 'utf8');
+
+    await initConfig(dir, 'TW'); // re-running init should not reset retryCeiling
+    const after = await loadConfig(dir);
+    expect(after.retryCeiling).toBe(7);
+  });
+});
+
+describe('runInit (CLI command)', () => {
+  it('reports success message on first run', async () => {
+    const message = await runInit(dir, { prefix: 'TW' });
+    expect(message).toContain('Initialized');
+    expect(message).toContain('TW');
+  });
+
+  it('reports already-initialized on second run', async () => {
+    await runInit(dir, { prefix: 'TW' });
+    const message = await runInit(dir, { prefix: 'TW' });
+    expect(message).toContain('Already initialized');
+  });
+});
