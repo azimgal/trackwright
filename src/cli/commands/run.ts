@@ -3,7 +3,7 @@ import { loadConfig } from '../../config/loader.js';
 import { TicketStore } from '../../tickets/store.js';
 import { EvidenceStore } from '../../evidence/store.js';
 import { GitRepo } from '../../git/repo.js';
-import { ensureWorkBranch } from '../../git/safety.js';
+import { assertCurrentBranchIsSafeToRunOn, ensureWorkBranch } from '../../git/safety.js';
 import { ClaudeCliRunner } from '../../claude/runner.js';
 import { MockClaudeRunner } from '../../claude/mock-runner.js';
 import type { ClaudeRunner } from '../../claude/types.js';
@@ -25,8 +25,13 @@ export async function runTicketRun(
   const evidenceStore = new EvidenceStore(path.join(projectRoot, config.evidenceDir));
   const gitRepo = new GitRepo(projectRoot);
 
-  if (!options.skipBranch && (await gitRepo.isCleanRepo())) {
-    await ensureWorkBranch(gitRepo, ticketId);
+  if (await gitRepo.isCleanRepo()) {
+    // Always enforced, even with --skip-branch: see the doc comment on
+    // assertCurrentBranchIsSafeToRunOn for why this specific check must never be skippable.
+    await assertCurrentBranchIsSafeToRunOn(gitRepo);
+    if (!options.skipBranch) {
+      await ensureWorkBranch(gitRepo, ticketId);
+    }
   }
 
   const claudeRunner: ClaudeRunner = options.dryRun
