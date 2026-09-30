@@ -7,12 +7,13 @@ import { assertCurrentBranchIsSafeToRunOn, ensureWorkBranch } from '../../git/sa
 import { ClaudeCliRunner } from '../../claude/runner.js';
 import { MockClaudeRunner } from '../../claude/mock-runner.js';
 import type { ClaudeRunner } from '../../claude/types.js';
-import { WorkflowEngine, type RunResult } from '../../workflow/engine.js';
+import { WorkflowEngine, type RunResult, type StepResult } from '../../workflow/engine.js';
 
 export interface RunOptions {
   dryRun?: boolean;
   maxSteps?: number;
   skipBranch?: boolean;
+  onStep?: (step: StepResult) => void;
 }
 
 export async function runTicketRun(
@@ -51,5 +52,5 @@ export async function runTicketRun(
     cwd: projectRoot,
   });
 
-  return engine.run(ticketId, { maxSteps: options.maxSteps });
+  return engine.run(ticketId, { maxSteps: options.maxSteps, onStep: options.onStep });
 }

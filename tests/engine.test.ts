@@ -280,6 +280,16 @@ describe('WorkflowEngine ready gate', () => {
 
     const runner = new MockClaudeRunner();
     runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    // discipline: 'development' with no specialization is deterministically ambiguous (see
+    // design/gate.ts), so it escalates to the design-gate-agent; without this the ticket fails
+    // closed to "design required" and gets stuck at the design stage instead of ever reaching
+    // the dependency check this test is actually about.
+    runner.enqueueFor('design-gate-agent', {
+      outcome: 'SUCCESS',
+      summary: 'backend-only change, no design required',
+      data: { designRequired: false, reasoning: 'backend-only change' },
+      durationMs: 1,
+    });
     const engine = await makeEngine(runner);
     const result = await engine.run('TW-0007', { maxSteps: 5 });
 

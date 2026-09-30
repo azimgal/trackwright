@@ -42,3 +42,14 @@ export { projectConfigSchema } from './config/schema.js';
 export type { ProjectConfig } from './config/schema.js';
 export { defaultConfig } from './config/defaults.js';
 export { loadConfig, initConfig, isInitialized, ConfigNotFoundError } from './config/loader.js';
+
+export * from './design/types.js';
+export type { DesignProvider, DesignCreateRequest } from './design/provider.js';
+export { DesignNotFoundError } from './design/provider.js';
+export { LocalDesignArtifactProvider } from './design/local-provider.js';
+export { deterministicDesignGate } from './design/gate.js';
+export type { DesignGateDecision } from './design/gate.js';
+export { hashText, isDesignStale } from './design/staleness.js';
+export type { StalenessInput } from './design/staleness.js';
+export { LocalPlaceholderVisualVerifier } from './design/visual-verify.js';
+export type { VisualVerifier, VisualVerifyRequest } from './design/visual-verify.js';

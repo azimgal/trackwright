@@ -16,6 +16,11 @@ import { nextStage, runnerFor, IllegalTransitionError } from './state-machine.js
 import type { RunOutcome } from './outcomes.js';
 import { RUN_OUTCOMES, type FailureOutcome } from './outcomes.js';
 import type { Stage } from './stages.js';
+import { deterministicDesignGate } from '../design/gate.js';
+import { LocalDesignArtifactProvider } from '../design/local-provider.js';
+import type { DesignProvider } from '../design/provider.js';
+import { hashText, isDesignStale } from '../design/staleness.js';
+import { LocalPlaceholderVisualVerifier, type VisualVerifier } from '../design/visual-verify.js';
 
 export interface StepResult {
   ticketId: string;
@@ -47,6 +52,11 @@ export interface EngineDeps {
   config: ProjectConfig;
   gitRepo: GitRepo;
   cwd: string;
+  /** Optional — defaults to LocalDesignArtifactProvider under <evidenceDir>/../design. Callers
+   * that don't care about Design Sync (most tests, non-design tickets) never need to set this. */
+  designProvider?: DesignProvider;
+  /** Optional — defaults to LocalPlaceholderVisualVerifier (see design/visual-verify.ts). */
+  visualVerifier?: VisualVerifier;
 }
 
 /**
@@ -56,9 +66,25 @@ export interface EngineDeps {
  * itself always comes from state-machine.ts, never re-decided here.
  */
 export class WorkflowEngine {
-  constructor(private readonly deps: EngineDeps) {}
+  private readonly designProvider: DesignProvider;
+  private readonly visualVerifier: VisualVerifier;
 
-  async run(ticketId: string, opts: { maxSteps?: number } = {}): Promise<RunResult> {
+  constructor(private readonly deps: EngineDeps) {
+    this.designProvider = deps.designProvider ?? new LocalDesignArtifactProvider(`${deps.cwd}/.trackwright/design`);
+    this.visualVerifier = deps.visualVerifier ?? new LocalPlaceholderVisualVerifier();
+  }
+
+  /**
+   * `onStep` fires immediately after each stage transition, before the loop continues — used by
+   * the CLI (`trackwright run`) to print progress live instead of buffering everything until the
+   * whole run finishes. Found necessary during real dogfooding: a real run with real Claude
+   * invocations takes minutes, and silent buffering until completion gives zero feedback the
+   * whole time, which is a bad experience distinct from --dry-run's near-instant runs.
+   */
+  async run(
+    ticketId: string,
+    opts: { maxSteps?: number; onStep?: (step: StepResult) => void } = {},
+  ): Promise<RunResult> {
     const maxSteps = opts.maxSteps ?? 20;
     const steps: StepResult[] = [];
 
@@ -72,6 +98,7 @@ export class WorkflowEngine {
 
       const step = await this.step(ticketId);
       steps.push(step);
+      opts.onStep?.(step);
 
       if (step.toStage === 'done') {
         const finalTicket = await this.deps.ticketStore.getOrThrow(ticketId);
@@ -369,21 +396,66 @@ export class WorkflowEngine {
   }
 
   /**
-   * MVP stub — see docs/roadmap.md, Design Sync is not implemented yet. This makes the gate
-   * behave honestly (never silently auto-approves a required design) without pretending to run a
-   * real design-review agent.
+   * Design Gate (docs/architecture.md, "Design Sync"). Deterministic rules (design/gate.ts) run
+   * first and free; a Claude judgment call only happens for the genuinely ambiguous case, and
+   * even then fails closed (uncertain -> required) rather than risk silently skipping a needed
+   * design review. A required design that has no artifact yet gets one drafted automatically
+   * (via this.designProvider) — but it is never auto-approved; approval is only ever a human,
+   * via `trackwright design approve`.
    */
   private async executeDesignGate(ticket: Ticket): Promise<AgentResult> {
-    if (!requiresDesignGate(ticket)) {
+    let decision = deterministicDesignGate(ticket);
+
+    if (decision === 'ambiguous') {
+      const judged = await this.executeClaudeAgent('design-gate-agent', ticket, {}, 'design');
+      if (judged.outcome !== 'SUCCESS' || judged.data.designRequired !== false) {
+        decision = 'required'; // fail closed: SYSTEM_ERROR, or the model said true/was unclear
+      } else {
+        decision = 'not-required';
+      }
+    }
+
+    if (decision === 'not-required') {
       return { outcome: 'SUCCESS', summary: 'design not required for this ticket', data: {}, durationMs: 0 };
     }
-    if (ticket.frontmatter.design_status === 'synced') {
-      return { outcome: 'SUCCESS', summary: 'design already synced', data: {}, durationMs: 0 };
+
+    const existing = await this.designProvider.getLatestForTicket(ticket.frontmatter.id);
+    const currentSha = await this.safeSha();
+    const currentRequirementsHash = hashText(ticket.sections['Requirements'] ?? '');
+
+    if (existing?.status === 'approved') {
+      const stale = isDesignStale({ artifact: existing, currentRequirementsHash, currentGitSha: currentSha });
+      if (!stale) {
+        return { outcome: 'SUCCESS', summary: `design ${existing.designId} approved and fresh`, data: {}, durationMs: 0 };
+      }
+      await this.designProvider.markStale(existing.designId);
+      return {
+        outcome: 'BLOCKED',
+        summary: `design ${existing.designId} is stale (requirements or code changed since approval) — needs re-sync`,
+        data: {},
+        durationMs: 0,
+      };
     }
+
+    if (!existing || existing.status === 'stale') {
+      const created = await this.designProvider.createOrUpdateDesign({
+        ticketId: ticket.frontmatter.id,
+        brief: ticket.sections['Requirements']?.trim() || ticket.sections['Context']?.trim() || '',
+        constraints: [],
+        requirementsHash: currentRequirementsHash,
+      });
+      return {
+        outcome: 'BLOCKED',
+        summary: `design required — drafted ${created.designId} at ${created.artifactPath}, awaiting human approval via \`trackwright design approve ${created.designId}\``,
+        data: {},
+        durationMs: 0,
+      };
+    }
+
+    // existing.status === 'draft': already drafted, still awaiting a human.
     return {
       outcome: 'BLOCKED',
-      summary:
-        'design required but not synced — Trackwright MVP has no automated design-sync agent yet; set design_status: synced by hand once a human has approved the design',
+      summary: `design ${existing.designId} drafted, awaiting human approval via \`trackwright design approve ${existing.designId}\``,
       data: {},
       durationMs: 0,
     };
@@ -496,7 +568,7 @@ export class WorkflowEngine {
   private async executeVerification(ticket: Ticket): Promise<AgentResult> {
     const diff = await this.deps.gitRepo.diffAgainstBase();
     const testEvidence = await this.deps.evidenceStore.latestForStage(ticket.frontmatter.id, 'testing');
-    return this.executeClaudeAgent(
+    const result = await this.executeClaudeAgent(
       'verification-agent',
       ticket,
       {
@@ -505,6 +577,24 @@ export class WorkflowEngine {
       },
       'verification',
     );
+    if (result.outcome !== 'SUCCESS' || !requiresDesignGate(ticket)) return result;
+
+    // Design-sensitive ticket that otherwise passed verification: also run the visual check
+    // (docs/architecture.md, "Post-implementation visual verification"). DESIGN_CONCERNS/FAIL can
+    // downgrade an otherwise-passing verification — a design ticket isn't "done" just because the
+    // functional verification passed.
+    const artifact = await this.designProvider.getLatestForTicket(ticket.frontmatter.id);
+    if (!artifact) return result; // nothing to check against — routing already required approval earlier
+    const check = await this.visualVerifier.verify({ designArtifact: artifact, resultArtifactPath: null });
+    await this.designProvider.recordVisualCheck(artifact.designId, check);
+
+    if (check.outcome === 'DESIGN_FAIL') {
+      return { ...result, outcome: 'VERIFICATION_FAILED', summary: `visual check failed: ${check.summary}` };
+    }
+    if (check.outcome === 'DESIGN_CONCERNS') {
+      return { ...result, outcome: 'CONCERNS', summary: `visual check has concerns: ${check.summary}` };
+    }
+    return result;
   }
 
   private async executeAwaitingMerge(ticket: Ticket): Promise<AgentResult> {

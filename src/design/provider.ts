@@ -26,6 +26,12 @@ export interface DesignProvider {
   getLatestForTicket(ticketId: string): Promise<DesignArtifact | null>;
   /** Record a human approval — the only way an artifact's status becomes "approved". */
   approve(designId: string): Promise<DesignArtifact>;
+  /** Mark an artifact stale — see design/staleness.ts. */
+  markStale(designId: string): Promise<DesignArtifact>;
+  /** Record the git SHA an artifact was last synced/approved against. */
+  setReferenceSha(designId: string, sha: string): Promise<DesignArtifact>;
+  /** Append a visual-check result, keeping prior checks in history. */
+  recordVisualCheck(designId: string, check: DesignArtifact['visualChecks'][number]): Promise<DesignArtifact>;
 }
 
 export class DesignNotFoundError extends Error {

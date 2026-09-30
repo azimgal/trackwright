@@ -5,6 +5,7 @@ import { runTicketCreate } from './commands/ticket-create.js';
 import { runTicketList, runTicketShow } from './commands/ticket-list.js';
 import { runTicketRun } from './commands/run.js';
 import { runTicketWaive } from './commands/waive.js';
+import { runDesignApprove, runDesignList, runDesignShow } from './commands/design.js';
 
 const program = new Command();
 
@@ -95,11 +96,52 @@ program
         dryRun: opts.dryRun,
         maxSteps: opts.maxSteps,
         skipBranch: opts.skipBranch,
+        // Printed live as each stage finishes, not buffered to the end — a real run can take
+        // minutes (real Claude invocations), and --dry-run runs so fast this makes no visible
+        // difference either way.
+        onStep: (step) => {
+          console.log(`${step.fromStage} -> ${step.toStage}  [${step.outcome}]  ${step.summary}`);
+        },
       });
-      for (const step of result.steps) {
-        console.log(`${step.fromStage} -> ${step.toStage}  [${step.outcome}]  ${step.summary}`);
-      }
       console.log(`\nStopped: ${result.stopReason}. Ticket ${result.ticket.frontmatter.id} is now at stage "${result.ticket.frontmatter.stage}".`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const design = program.command('design').description('Manage design artifacts (Design Sync).');
+
+design
+  .command('approve <designId>')
+  .description('Human-only: approve a design artifact, syncing the ticket it belongs to.')
+  .option('-C, --cwd <dir>', 'project root', process.cwd())
+  .action(async (designId, opts) => {
+    try {
+      console.log(await runDesignApprove(opts.cwd, designId));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+design
+  .command('show <designId>')
+  .description('Show a design artifact in full.')
+  .option('-C, --cwd <dir>', 'project root', process.cwd())
+  .action(async (designId, opts) => {
+    try {
+      console.log(await runDesignShow(opts.cwd, designId));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+design
+  .command('list <ticketId>')
+  .description('Show the latest design artifact for a ticket.')
+  .option('-C, --cwd <dir>', 'project root', process.cwd())
+  .action(async (ticketId, opts) => {
+    try {
+      console.log(await runDesignList(opts.cwd, ticketId));
     } catch (err) {
       fail(err);
     }
