@@ -27,6 +27,14 @@ export interface EvidenceRecord {
    * files stay reasonably sized; the full response is not durably kept anywhere.
    */
   rawExcerpt?: string;
+  /**
+   * Claude Code's own `permission_denials` from the response envelope, recorded whenever present
+   * regardless of outcome — an agent can report SUCCESS while a tool call it needed (e.g. its own
+   * `git commit`) was silently denied, leaving work undone with no error surfaced anywhere else.
+   * Found necessary via real dogfooding: diagnosing a silently-blocked git commit required a
+   * manual standalone repro to even discover permission_denials existed in the envelope at all.
+   */
+  permissionDenials?: unknown[];
   summary: string;
   costUsd?: number;
 }

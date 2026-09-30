@@ -179,6 +179,7 @@ export class WorkflowEngine {
       gitSha,
       failureReason: result.failureReason,
       rawExcerpt: result.outcome === 'SYSTEM_ERROR' ? this.rawExcerptFor(result.raw) : undefined,
+      permissionDenials: this.permissionDenialsFor(result.raw),
       summary: result.summary,
       costUsd: result.costUsd,
     });
@@ -280,6 +281,12 @@ export class WorkflowEngine {
     } catch {
       return undefined;
     }
+  }
+
+  private permissionDenialsFor(raw: unknown): unknown[] | undefined {
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const denials = (raw as { permission_denials?: unknown }).permission_denials;
+    return Array.isArray(denials) && denials.length > 0 ? denials : undefined;
   }
 
   private agentNameFor(stage: Stage): string {
