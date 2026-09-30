@@ -151,6 +151,7 @@ export class WorkflowEngine {
       artifacts: [],
       gitSha,
       failureReason: result.failureReason,
+      rawExcerpt: result.outcome === 'SYSTEM_ERROR' ? this.rawExcerptFor(result.raw) : undefined,
       summary: result.summary,
       costUsd: result.costUsd,
     });
@@ -244,6 +245,16 @@ export class WorkflowEngine {
     }
   }
 
+  private rawExcerptFor(raw: unknown): string | undefined {
+    if (raw == null) return undefined;
+    try {
+      const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      return text.slice(0, 4000);
+    } catch {
+      return undefined;
+    }
+  }
+
   private agentNameFor(stage: Stage): string {
     const kind = runnerFor(stage);
     return kind === 'none' ? 'engine' : kind;
@@ -263,7 +274,7 @@ export class WorkflowEngine {
       case 'implementer':
         return this.executeImplementer(ticket);
       case 'code-reviewer':
-        return this.executeClaudeAgent('code-reviewer', ticket, {});
+        return this.executeClaudeAgent('code-reviewer', ticket, {}, stage);
       case 'gate-runner':
         return this.executeChecks(this.deps.config.checks.test, 'development'); // routes RETRYABLE_FAILURE -> development
       case 'verification-agent':
@@ -288,7 +299,7 @@ export class WorkflowEngine {
    * while skipping a required section, is downgraded to NEEDS_CLARIFICATION here.
    */
   private async executePlanning(ticket: Ticket): Promise<AgentResult> {
-    const result = await this.executeClaudeAgent('planner', ticket, {});
+    const result = await this.executeClaudeAgent('planner', ticket, {}, 'planning');
     if (result.outcome !== 'SUCCESS') return result;
 
     const draftedSections = this.sectionUpdatesFor('planning', result);
@@ -395,17 +406,38 @@ export class WorkflowEngine {
 
   // ---- Claude-invoking stage runners ----
 
+  /**
+   * If this stage's most recent attempt for this ticket failed, tells the model what went wrong
+   * last time. Found necessary during real dogfooding: a bare retry of the identical prompt gives
+   * the model no signal that anything needs to change, so a transient non-compliant response
+   * (e.g. prose instead of the required JSON) can repeat identically across all retry attempts
+   * instead of self-correcting.
+   */
+  private async previousFailureNote(ticketId: string, stage: Stage): Promise<string | null> {
+    const history = await this.deps.evidenceStore.historyForStage(ticketId, stage);
+    const last = history[history.length - 1];
+    if (!last || last.outcome === 'SUCCESS') return null;
+    return (
+      `Note: your previous attempt at this stage was rejected. Reason: ${last.failureReason ?? last.summary}. ` +
+      `Do not repeat the same mistake — in particular, if the reason mentions a missing or malformed ` +
+      `field in your JSON response, make sure this response includes it correctly.`
+    );
+  }
+
   private async executeClaudeAgent(
     agentName: string,
     ticket: Ticket,
     extra: Record<string, string>,
+    stage: Stage,
   ): Promise<AgentResult> {
     const agent = getAgent(agentName);
+    const note = await this.previousFailureNote(ticket.frontmatter.id, stage);
     const ctx: AgentPromptContext = { ticket, cwd: this.deps.cwd, extra };
+    const taskPrompt = agent.buildTaskPrompt(ctx);
     const invocation: AgentInvocation = {
       agentName: agent.name,
       systemPrompt: agent.buildSystemPrompt(),
-      prompt: agent.buildTaskPrompt(ctx),
+      prompt: note ? `${note}\n\n${taskPrompt}` : taskPrompt,
       allowedTools: agent.allowedTools,
       disallowedTools: agent.disallowedTools,
       cwd: this.deps.cwd,
@@ -436,7 +468,7 @@ export class WorkflowEngine {
     let worst: AgentResult | null = null;
 
     for (const agentName of agentNames) {
-      const result = await this.executeClaudeAgent(agentName, ticket, {});
+      const result = await this.executeClaudeAgent(agentName, ticket, {}, 'development');
       if (result.outcome !== 'SUCCESS') {
         if (!worst) {
           worst = result;
@@ -464,10 +496,15 @@ export class WorkflowEngine {
   private async executeVerification(ticket: Ticket): Promise<AgentResult> {
     const diff = await this.deps.gitRepo.diffAgainstBase();
     const testEvidence = await this.deps.evidenceStore.latestForStage(ticket.frontmatter.id, 'testing');
-    return this.executeClaudeAgent('verification-agent', ticket, {
-      diff: diff.slice(0, 20_000), // bound prompt size; evidence keeps the full record separately
-      testEvidence: testEvidence ? JSON.stringify(testEvidence) : '(no testing evidence recorded)',
-    });
+    return this.executeClaudeAgent(
+      'verification-agent',
+      ticket,
+      {
+        diff: diff.slice(0, 20_000), // bound prompt size; evidence keeps the full record separately
+        testEvidence: testEvidence ? JSON.stringify(testEvidence) : '(no testing evidence recorded)',
+      },
+      'verification',
+    );
   }
 
   private async executeAwaitingMerge(ticket: Ticket): Promise<AgentResult> {

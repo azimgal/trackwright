@@ -179,6 +179,30 @@ describe('WorkflowEngine retry ceiling', () => {
     expect(developmentAttempts.filter((r) => r.outcome === 'RETRYABLE_FAILURE')).toHaveLength(3);
     expect(developmentAttempts[developmentAttempts.length - 1]!.outcome).toBe('BLOCKED');
   });
+
+  it('tells the agent what went wrong on the previous attempt, not just a bare retry', async () => {
+    // Found during real dogfooding: a bare retry with no feedback lets a non-compliant response
+    // repeat identically across attempts. See engine.ts, previousFailureNote.
+    await createReadyTicket('TW-0008');
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', {
+      outcome: 'SYSTEM_ERROR',
+      summary: 'malformed',
+      data: {},
+      failureReason: 'response was not valid JSON',
+      durationMs: 1,
+    });
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    await engine.step('TW-0008'); // first attempt: fails
+    await engine.step('TW-0008'); // second attempt: should see the failure note
+
+    const secondInvocation = runner.invocations[1]!;
+    expect(secondInvocation.agentName).toBe('planner');
+    expect(secondInvocation.prompt).toContain('your previous attempt at this stage was rejected');
+    expect(secondInvocation.prompt).toContain('response was not valid JSON');
+  });
 });
 
 describe('WorkflowEngine Awaiting Merge', () => {

@@ -19,6 +19,14 @@ export interface EvidenceRecord {
   artifacts: string[];
   gitSha: string | null;
   failureReason?: string;
+  /**
+   * A truncated excerpt of the agent's raw response, recorded only for SYSTEM_ERROR (a parse
+   * failure or contract violation). Found necessary during real (non-mock) dogfooding: without
+   * this, diagnosing why an agent's response didn't parse required manually reproducing the exact
+   * invocation by hand — see docs/architecture.md's dogfood notes. Bounded to a few KB so evidence
+   * files stay reasonably sized; the full response is not durably kept anywhere.
+   */
+  rawExcerpt?: string;
   summary: string;
   costUsd?: number;
 }
