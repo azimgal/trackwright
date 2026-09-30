@@ -19,14 +19,6 @@ export const RUN_OUTCOMES = ['SUCCESS', ...FAILURE_OUTCOMES] as const;
 export type RunOutcome = (typeof RUN_OUTCOMES)[number];
 
 /**
- * Verification-specific outcome vocabulary (BMAD-inspired, see docs/architecture.md). This is
- * distinct from RunOutcome: a verification run can technically SUCCEED (produce a well-formed
- * answer) while that answer is CONCERNS or FAIL, which then drives ticket routing.
- */
-export const VERIFICATION_OUTCOMES = ['PASS', 'CONCERNS', 'FAIL', 'WAIVED'] as const;
-export type VerificationOutcome = (typeof VERIFICATION_OUTCOMES)[number];
-
-/**
  * Which failure outcomes are safe to retry automatically, and up to what ceiling. Everything
  * else requires routing to a different stage or a human — never a bare retry loop.
  */

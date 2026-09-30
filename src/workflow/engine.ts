@@ -6,7 +6,7 @@ import {
   implementerAgentsFor,
   requiresDesignGate,
 } from '../policies/routing.js';
-import type { Ticket } from '../tickets/schema.js';
+import { findClarificationMarkers, isPlanningComplete, type Ticket } from '../tickets/schema.js';
 import type { TicketStore } from '../tickets/store.js';
 import type { ClaudeRunner, AgentInvocation, AgentResult } from '../claude/types.js';
 import type { EvidenceStore } from '../evidence/store.js';
@@ -193,13 +193,18 @@ export class WorkflowEngine {
    * half-formed `data` is not persisted into the ticket body.
    */
   private sectionUpdatesFor(stage: Stage, result: AgentResult): Record<string, string> {
-    if (result.outcome !== 'SUCCESS') return {};
+    // Planning's draft is worth keeping even when downgraded to NEEDS_CLARIFICATION by
+    // executePlanning above — a human resolving the markers needs to see what was actually
+    // drafted, not an empty ticket. Every other stage only persists on outright SUCCESS.
+    const persistable = result.outcome === 'SUCCESS' || (stage === 'planning' && result.outcome === 'NEEDS_CLARIFICATION');
+    if (!persistable) return {};
     const data = result.data as Record<string, string | undefined>;
     switch (stage) {
       case 'planning': {
         const updates: Record<string, string> = {};
         if (data.requirements) updates['Requirements'] = data.requirements;
         if (data.acceptanceCriteria) updates['Acceptance Criteria'] = data.acceptanceCriteria;
+        if (data.definitionOfDone) updates['Definition of Done'] = data.definitionOfDone;
         if (data.plan) updates['Plan'] = data.plan;
         if (data.tasks) updates['Tasks'] = data.tasks;
         return updates;
@@ -250,7 +255,7 @@ export class WorkflowEngine {
       case 'none':
         return this.executeReadyGate(ticket);
       case 'planner':
-        return this.executeClaudeAgent('planner', ticket, {});
+        return this.executePlanning(ticket);
       case 'architecture-review':
         return this.executeArchitectureReview(ticket);
       case 'design-gate':
@@ -272,6 +277,40 @@ export class WorkflowEngine {
 
   private systemError(_never: never): AgentResult {
     return { outcome: 'SYSTEM_ERROR', summary: 'unreachable runner kind', data: {}, durationMs: 0 };
+  }
+
+  /**
+   * Planning is a hybrid: the planner agent drafts Requirements/Acceptance Criteria/Plan/Tasks,
+   * but whether that draft is actually good enough to leave Planning is a deterministic check
+   * against the ticket's own rules (tickets/schema.ts: isPlanningComplete,
+   * findClarificationMarkers) — not just trust in the agent's self-reported SUCCESS. An agent
+   * that reports SUCCESS while leaving `[NEEDS CLARIFICATION: ...]` markers in its draft, or
+   * while skipping a required section, is downgraded to NEEDS_CLARIFICATION here.
+   */
+  private async executePlanning(ticket: Ticket): Promise<AgentResult> {
+    const result = await this.executeClaudeAgent('planner', ticket, {});
+    if (result.outcome !== 'SUCCESS') return result;
+
+    const draftedSections = this.sectionUpdatesFor('planning', result);
+    const draftTicket: Ticket = { ...ticket, sections: { ...ticket.sections, ...draftedSections } };
+
+    const markers = findClarificationMarkers(draftTicket);
+    if (markers.length > 0) {
+      return {
+        ...result,
+        outcome: 'NEEDS_CLARIFICATION',
+        summary: `planning drafted, but ${markers.length} unresolved clarification marker(s) remain`,
+      };
+    }
+    if (!isPlanningComplete(draftTicket)) {
+      return {
+        ...result,
+        outcome: 'NEEDS_CLARIFICATION',
+        summary:
+          'planner reported success but did not populate all sections required to leave planning (Context/Requirements/Acceptance Criteria/Definition of Done)',
+      };
+    }
+    return result;
   }
 
   // ---- deterministic (non-Claude) stage runners ----
@@ -408,7 +447,18 @@ export class WorkflowEngine {
         }
       }
     }
-    return worst ?? { outcome: 'SUCCESS', summary: `${agentNames.length} implementer(s) completed`, data: {}, durationMs: 0 };
+    if (worst) return worst;
+
+    // Fast feedback loop (docs/architecture.md, "Development"): format/lint/typecheck-style
+    // checks run here, narrow and quick, distinct from the full `test` tier (Testing stage) and
+    // the heavy `premerge` tier (Awaiting Merge). A failure here is fixed in Development, same as
+    // any other implementer failure — it self-loops via the same RETRYABLE_FAILURE routing.
+    if (this.deps.config.checks.fast.length > 0) {
+      const fastCheck = await this.executeChecks(this.deps.config.checks.fast, 'development');
+      if (fastCheck.outcome !== 'SUCCESS') return fastCheck;
+    }
+
+    return { outcome: 'SUCCESS', summary: `${agentNames.length} implementer(s) completed`, data: {}, durationMs: 0 };
   }
 
   private async executeVerification(ticket: Ticket): Promise<AgentResult> {

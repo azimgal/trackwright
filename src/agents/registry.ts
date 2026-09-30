@@ -50,7 +50,7 @@ function ticketSection(ticket: Ticket, name: string): string {
 
 const PLANNER: AgentDefinition = {
   name: 'planner',
-  role: 'Turns a ticket\'s Context into concrete Requirements, Acceptance Criteria, a Plan, and Tasks.',
+  role: 'Turns a ticket\'s Context into concrete Requirements, Acceptance Criteria, a Definition of Done, a Plan, and Tasks.',
   model: 'sonnet',
   allowedTools: ['Read', 'Grep', 'Glob'],
   disallowedTools: ['Write', 'Edit', 'Bash'],
@@ -62,7 +62,9 @@ const PLANNER: AgentDefinition = {
   buildSystemPrompt() {
     return `You are the planning agent for a ticket-driven development tool. Your only job is to read
 the ticket's Context section and the repository, then propose Requirements (EARS style: "WHEN
-<condition> THE SYSTEM SHALL <behavior>"), Acceptance Criteria, a short Plan, and a Tasks list.
+<condition> THE SYSTEM SHALL <behavior>"), Acceptance Criteria, a Definition of Done, a short Plan,
+and a Tasks list. A ticket cannot leave planning without all of these — an empty or missing
+Definition of Done is treated the same as an empty Requirements section, not an optional extra.
 You never write or edit files. If something is genuinely ambiguous, write it as
 "[NEEDS CLARIFICATION: ...]" inside the relevant section rather than guessing, and set outcome to
 NEEDS_CLARIFICATION.` + outputContract(this.validOutcomes);
@@ -73,8 +75,10 @@ NEEDS_CLARIFICATION.` + outputContract(this.validOutcomes);
 ## Context
 ${ticketSection(ctx.ticket, 'Context')}
 
-Produce Requirements, Acceptance Criteria, a Plan, and Tasks for this ticket. Put the full text of
-each in "data" as { "requirements": "...", "acceptanceCriteria": "...", "plan": "...", "tasks": "..." }.`;
+Produce Requirements, Acceptance Criteria, a Definition of Done, a Plan, and Tasks for this
+ticket. Put the full text of each in "data" as { "requirements": "...", "acceptanceCriteria":
+"...", "definitionOfDone": "...", "plan": "...", "tasks": "..." }. All five fields are required —
+this ticket cannot leave planning without them.`;
   },
 };
 

@@ -2,7 +2,28 @@ import type { AgentInvocation, AgentResult, ClaudeRunner } from './types.js';
 
 export type MockResponder = (invocation: AgentInvocation, callIndex: number) => AgentResult | Promise<AgentResult>;
 
-function defaultSuccess(): AgentResult {
+/**
+ * The planner's default mock response must actually satisfy `isPlanningComplete` (see
+ * tickets/schema.ts and workflow/engine.ts's executePlanning), or an unconfigured `--dry-run`
+ * would get stuck in planning forever instead of demonstrating the full pipeline — which is the
+ * entire documented point of `--dry-run` (README.md, "exercise the whole pipeline"). Every other
+ * agent's default stays a bland, contentless success.
+ */
+function defaultSuccess(agentName: string): AgentResult {
+  if (agentName === 'planner') {
+    return {
+      outcome: 'SUCCESS',
+      summary: 'mock: default planning draft',
+      data: {
+        requirements: '(mock) WHEN the ticket runs THE SYSTEM SHALL complete this stage.',
+        acceptanceCriteria: '(mock) the pipeline reaches Done.',
+        definitionOfDone: '(mock) all stages report SUCCESS.',
+        plan: '(mock) no real plan — this is a --dry-run default.',
+        tasks: '(mock) none — this is a --dry-run default.',
+      },
+      durationMs: 1,
+    };
+  }
   return {
     outcome: 'SUCCESS',
     summary: 'mock: default success',
@@ -63,6 +84,6 @@ export class MockClaudeRunner implements ClaudeRunner {
       const responder = this.globalQueue.shift()!;
       return responder(invocation, index);
     }
-    return defaultSuccess();
+    return defaultSuccess(invocation.agentName);
   }
 }

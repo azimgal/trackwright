@@ -23,6 +23,17 @@ let evidenceStore: EvidenceStore;
 const PASS_CHECK = 'node -e "process.exit(0)"';
 const FAIL_CHECK = 'node -e "process.exit(1)"';
 
+// A planner response that actually satisfies isPlanningComplete (Context/Requirements/Acceptance
+// Criteria/Definition of Done) — see engine.ts's executePlanning, which downgrades an
+// under-specified SUCCESS to NEEDS_CLARIFICATION rather than trusting the agent blindly.
+const COMPLETE_PLAN_DATA = {
+  requirements: 'req',
+  acceptanceCriteria: 'ac',
+  definitionOfDone: 'dod',
+  plan: 'plan',
+  tasks: 'tasks',
+};
+
 async function makeEngine(runner: MockClaudeRunner, checksOverride?: Partial<ReturnType<typeof defaultConfig>['checks']>) {
   const config = { ...(await initConfig(projectRoot, 'TW')), checks: { fast: [], test: [PASS_CHECK], premerge: [PASS_CHECK], ...checksOverride } };
   return new WorkflowEngine({
@@ -67,7 +78,7 @@ describe('WorkflowEngine happy path', () => {
     runner.enqueueFor('planner', {
       outcome: 'SUCCESS',
       summary: 'planned',
-      data: { requirements: 'req', acceptanceCriteria: 'ac', plan: 'plan', tasks: 'tasks' },
+      data: COMPLETE_PLAN_DATA,
       durationMs: 1,
     });
     // architecture/design stages are deterministic stubs (empty sections -> auto SUCCESS), no mock needed
@@ -101,7 +112,7 @@ describe('WorkflowEngine happy path', () => {
 describe('WorkflowEngine verification outcomes', () => {
   async function advanceToVerification(runner: MockClaudeRunner) {
     await createReadyTicket('TW-0002');
-    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
     runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
     runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
   }
@@ -152,7 +163,7 @@ describe('WorkflowEngine retry ceiling', () => {
   it('fails closed to BLOCKED once a stage exceeds its retry ceiling', async () => {
     await createReadyTicket('TW-0003');
     const runner = new MockClaudeRunner();
-    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
     // implementer always fails retryably — never let it succeed
     for (let i = 0; i < 5; i++) {
       runner.enqueueFor('implementer.backend', { outcome: 'RETRYABLE_FAILURE', summary: 'flaky', data: {}, failureReason: 'boom', durationMs: 1 });
@@ -174,7 +185,7 @@ describe('WorkflowEngine Awaiting Merge', () => {
   it('runs premerge checks and reports merge_eligible in evidence', async () => {
     await createReadyTicket('TW-0004');
     const runner = new MockClaudeRunner();
-    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
     runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
     runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
     runner.enqueueFor('verification-agent', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
@@ -188,10 +199,37 @@ describe('WorkflowEngine Awaiting Merge', () => {
     expect(awaitingMergeHistory[0]!.outcome).toBe('SUCCESS');
   });
 
+  it('a stale verification (code changed since it was recorded) sends the ticket back to testing', async () => {
+    await createReadyTicket('TW-0044');
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('verification-agent', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    // Drive it stage by stage (not engine.run()) so a commit can be injected between
+    // Verification recording its evidence and Awaiting Merge checking staleness against it —
+    // this is the real WorkflowEngine, not just EvidenceStore.isStale in isolation.
+    let step = await engine.step('TW-0044'); // planning -> architecture
+    while (step.toStage !== 'awaiting-merge') {
+      step = await engine.step('TW-0044');
+    }
+    expect(step.fromStage).toBe('verification');
+
+    // Simulate code changing after verification approved it.
+    const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
+    await git(['commit', '--allow-empty', '-m', 'a change that happened after verification', '-q']);
+
+    const staleStep = await engine.step('TW-0044');
+    expect(staleStep.outcome).toBe('VERIFICATION_FAILED');
+    expect(staleStep.toStage).toBe('testing');
+  });
+
   it('a failing premerge check keeps the ticket at awaiting-merge with RETRYABLE_FAILURE', async () => {
     await createReadyTicket('TW-0005');
     const runner = new MockClaudeRunner();
-    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
     runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
     runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
     runner.enqueueFor('verification-agent', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
@@ -217,7 +255,7 @@ describe('WorkflowEngine ready gate', () => {
     });
 
     const runner = new MockClaudeRunner();
-    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
     const engine = await makeEngine(runner);
     const result = await engine.run('TW-0007', { maxSteps: 5 });
 
