@@ -9,6 +9,17 @@ export class ProtectedBranchError extends Error {
   }
 }
 
+export class UncommittedChangesError extends Error {
+  constructor() {
+    super(
+      'refusing to switch branches: the repository has uncommitted changes. Commit, stash, or ' +
+        'discard them yourself first — Trackwright never discards work it did not create, and ' +
+        'never wants to silently carry unrelated changes onto a ticket\'s dedicated branch.',
+    );
+    this.name = 'UncommittedChangesError';
+  }
+}
+
 export function isProtectedBranch(branch: string): boolean {
   return (PROTECTED_BRANCHES as readonly string[]).includes(branch);
 }
@@ -43,13 +54,23 @@ export async function assertCurrentBranchIsSafeToRunOn(repo: GitRepo): Promise<v
 
 /**
  * Ensure a dedicated branch exists and is checked out for this ticket's work, never touching a
- * protected branch directly. Refuses if the repo has uncommitted changes that are not this run's
- * own — see docs/architecture.md, "Git safety": never discard work this run did not itself
- * create.
+ * protected branch directly. Refuses outright if the repo has uncommitted changes — a `checkout`
+ * to an *existing* branch can silently carry unrelated uncommitted work onto it (git only refuses
+ * that checkout when there's an actual file conflict, not always), and this function has no way
+ * to know whether uncommitted changes belong to this ticket or to something else the caller was
+ * in the middle of. See docs/architecture.md, "Git safety": never discard, and never silently
+ * relocate, work this run did not itself create.
  */
-export async function ensureWorkBranch(repo: GitRepo, ticketId: string): Promise<string> {
+export async function ensureWorkBranch(
+  repo: GitRepo,
+  ticketId: string,
+  ignorePathPrefixes: readonly string[] = [],
+): Promise<string> {
   const branch = workBranchName(ticketId);
   await assertCurrentBranchIsSafeToRunOn(repo);
+  if (await repo.hasUncommittedChanges(ignorePathPrefixes)) {
+    throw new UncommittedChangesError();
+  }
 
   if (await repo.branchExists(branch)) {
     await repo.checkout(branch);

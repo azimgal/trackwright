@@ -4,11 +4,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { writeFile, mkdir } from 'node:fs/promises';
 import {
   assertCurrentBranchIsSafeToRunOn,
   assertPushIsSafe,
+  ensureWorkBranch,
   isProtectedBranch,
   ProtectedBranchError,
+  UncommittedChangesError,
   workBranchName,
 } from '../src/git/safety.js';
 import { GitRepo } from '../src/git/repo.js';
@@ -68,5 +71,37 @@ describe('assertCurrentBranchIsSafeToRunOn', () => {
     await initRepoOnBranch('dev');
     const repo = new GitRepo(dir);
     await expect(assertCurrentBranchIsSafeToRunOn(repo)).resolves.not.toThrow();
+  });
+});
+
+describe('ensureWorkBranch uncommitted-changes guard', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'trackwright-uncommitted-guard-'));
+    const git = (args: string[]) => execFileAsync('git', args, { cwd: dir });
+    await git(['init', '-q', '-b', 'dev']);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test']);
+    await git(['commit', '--allow-empty', '-m', 'initial', '-q']);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('refuses when there are uncommitted changes outside the ignored prefixes', async () => {
+    await writeFile(path.join(dir, 'unrelated-work.txt'), 'oops', 'utf8');
+    const repo = new GitRepo(dir);
+    await expect(ensureWorkBranch(repo, 'TW-0001', ['.trackwright'])).rejects.toThrow(
+      UncommittedChangesError,
+    );
+  });
+
+  it('ignores uncommitted changes inside an ignored prefix (e.g. a just-created ticket file)', async () => {
+    await mkdir(path.join(dir, '.trackwright', 'tickets'), { recursive: true });
+    await writeFile(path.join(dir, '.trackwright', 'tickets', 'TW-0001-x.md'), 'draft', 'utf8');
+    const repo = new GitRepo(dir);
+    await expect(ensureWorkBranch(repo, 'TW-0001', ['.trackwright'])).resolves.toBe('trackwright/tw-0001');
   });
 });

@@ -21,8 +21,16 @@ export class GitRepo {
     return this.git(['rev-parse', '--abbrev-ref', 'HEAD']);
   }
 
-  async hasUncommittedChanges(): Promise<boolean> {
-    const status = await this.git(['status', '--porcelain']);
+  /**
+   * `ignorePathPrefixes` excludes paths from the check via git pathspec `:(exclude)` — used so a
+   * just-created, not-yet-committed ticket file (normal, expected between `ticket create` and
+   * `run`) doesn't itself trip the "unrelated uncommitted work" guard in git/safety.ts. Only
+   * Trackwright's own bookkeeping paths should ever be passed here, never anything from the
+   * project being worked on.
+   */
+  async hasUncommittedChanges(ignorePathPrefixes: readonly string[] = []): Promise<boolean> {
+    const pathspecs = ignorePathPrefixes.map((p) => `:(exclude)${p}`);
+    const status = await this.git(['status', '--porcelain', '--', '.', ...pathspecs]);
     return status.length > 0;
   }
 
@@ -51,7 +59,9 @@ export class GitRepo {
     await this.git(['commit', '-m', message]);
   }
 
-  async isCleanRepo(): Promise<boolean> {
+  /** Is `cwd` actually inside a git working tree at all? Not to be confused with "no uncommitted
+   * changes" — that's `hasUncommittedChanges()` above, a deliberately different question. */
+  async isGitRepository(): Promise<boolean> {
     try {
       await this.git(['rev-parse', '--is-inside-work-tree']);
       return true;

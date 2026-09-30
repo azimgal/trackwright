@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { loadConfig } from '../../config/loader.js';
+import { CONFIG_DIR, loadConfig } from '../../config/loader.js';
 import { TicketStore } from '../../tickets/store.js';
 import { EvidenceStore } from '../../evidence/store.js';
 import { GitRepo } from '../../git/repo.js';
@@ -25,12 +25,16 @@ export async function runTicketRun(
   const evidenceStore = new EvidenceStore(path.join(projectRoot, config.evidenceDir));
   const gitRepo = new GitRepo(projectRoot);
 
-  if (await gitRepo.isCleanRepo()) {
+  if (await gitRepo.isGitRepository()) {
     // Always enforced, even with --skip-branch: see the doc comment on
     // assertCurrentBranchIsSafeToRunOn for why this specific check must never be skippable.
     await assertCurrentBranchIsSafeToRunOn(gitRepo);
     if (!options.skipBranch) {
-      await ensureWorkBranch(gitRepo, ticketId);
+      // Everything under .trackwright/ (config, tickets, evidence) is Trackwright's own
+      // bookkeeping — a ticket just created by `ticket create` is normal, expected uncommitted
+      // content at this point. Only *unrelated* uncommitted work should trip
+      // UncommittedChangesError.
+      await ensureWorkBranch(gitRepo, ticketId, [CONFIG_DIR]);
     }
   }
 

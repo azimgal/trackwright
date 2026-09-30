@@ -28,7 +28,15 @@ export { EvidenceStore } from './evidence/store.js';
 export type { EvidenceRecord } from './evidence/types.js';
 
 export { GitRepo } from './git/repo.js';
-export { ensureWorkBranch, assertPushIsSafe, isProtectedBranch, workBranchName, ProtectedBranchError } from './git/safety.js';
+export {
+  assertCurrentBranchIsSafeToRunOn,
+  ensureWorkBranch,
+  assertPushIsSafe,
+  isProtectedBranch,
+  workBranchName,
+  ProtectedBranchError,
+  UncommittedChangesError,
+} from './git/safety.js';
 
 export { projectConfigSchema } from './config/schema.js';
 export type { ProjectConfig } from './config/schema.js';
