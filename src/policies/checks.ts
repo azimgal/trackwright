@@ -20,8 +20,8 @@ const MAX_TAIL_CHARS = 4000;
  * Run a list of shell commands in `cwd`, one at a time, stopping at the first failure (there is
  * no value in running the rest of a check tier once one has already failed the ticket). This is
  * the mechanical "does it pass" runner — deliberately not an agent, not a judgment call, just
- * exit codes. It backs the Testing stage's `test_checks` and the Awaiting Merge stage's
- * `premerge_checks`.
+ * exit codes. It backs Development's `checks.fast`, Testing's `checks.test`, and Awaiting
+ * Merge's `checks.premerge`.
  */
 export async function runChecks(
   commands: readonly string[],
