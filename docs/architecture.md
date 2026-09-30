@@ -104,10 +104,11 @@ Not "waiting for a human." A machine stage that runs the expensive, repo-wide ch
 suite, e2e, clean-environment build, stale-evidence re-check, "does this still apply cleanly to the
 current target branch") **off** the tight iterate-fix-iterate loop of Development/Code
 Review/Testing, so that loop stays fast and a ticket sitting in Awaiting Merge does not block the
-next ticket from starting Development. Checks are configured per-project as three tiers
-(`fast_checks`, `test_checks`, `premerge_checks`); Awaiting Merge runs `premerge_checks` and sets
-`merge_eligible: true` on success. The MVP computes eligibility; it does not perform an actual
-`git merge` by default (see Roadmap).
+next ticket from starting Development. Checks are configured per-project as three tiers in
+`.trackwright/config.yaml`'s `checks` block — `checks.fast` (run at the end of Development, e.g.
+format/lint/typecheck), `checks.test` (run at Testing), `checks.premerge` (run here, at Awaiting
+Merge). Awaiting Merge runs `checks.premerge` and sets `merge_eligible: true` on success. The MVP
+computes eligibility; it does not perform an actual `git merge` by default (see Roadmap).
 
 ### Verification, independent of implementation
 

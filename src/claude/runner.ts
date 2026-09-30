@@ -20,9 +20,13 @@ interface ClaudeJsonEnvelope {
 /**
  * Real ClaudeRunner: spawns a fresh, isolated `claude -p` process per invocation (no persistent
  * conversation, no shared context between stages — see docs/architecture.md, "Claude Runner").
- * The task prompt is sent over stdin; the system prompt is appended (never replaces Claude
- * Code's own default system prompt) via --append-system-prompt, so built-in safety framing is
- * never silently dropped.
+ * The task prompt is sent over stdin. The system prompt is passed via `--system-prompt`, which
+ * *fully replaces* Claude Code's own default system prompt (not `--append-system-prompt`) — see
+ * `buildArgs()` below and docs/architecture.md's "learned empirically" note for why: appending to
+ * the default interactive-assistant framing was not reliably strict enough to stop the model
+ * asking a clarifying question instead of returning bare JSON. This does not weaken tool
+ * permissions: `--allowedTools`/`--disallowedTools` are enforced independently of system-prompt
+ * text.
  */
 export class ClaudeCliRunner implements ClaudeRunner {
   constructor(private readonly binary: string = 'claude') {}
