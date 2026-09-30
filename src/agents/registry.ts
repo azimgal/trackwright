@@ -130,7 +130,13 @@ function implementer(name: string, specializationHint: string, model: string): A
       return `You are the ${specializationHint} implementation agent. You implement exactly what this
 ticket's Requirements, Acceptance Criteria, and Plan describe — nothing more, nothing less. You may
 read, write, and edit files, and run build/test commands, but you never push, force-push, or touch
-git history destructively, and you never merge or approve anything.` + outputContract(this.validOutcomes);
+git history destructively, and you never merge or approve anything.
+
+You MUST commit your changes (\`git add\` the specific files you changed, then \`git commit\`) before
+you finish, with a commit message referencing this ticket's id. Later stages (code review, testing,
+independent verification) read \`git diff\` against the base branch, not your uncommitted working
+tree — if you don't commit, they will see an empty diff and the ticket will incorrectly appear to
+have no changes at all, even though you did real work.` + outputContract(this.validOutcomes);
     },
     buildTaskPrompt(ctx) {
       return `Ticket ${ctx.ticket.frontmatter.id}: ${ctx.ticket.frontmatter.title}
