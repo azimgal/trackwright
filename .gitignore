@@ -6,6 +6,9 @@ coverage/
 .env
 .env.local
 
+# Claude Code / oh-my-claudecode session-local state, not part of this project
+.omc/
+
 # per-project runtime state created by `trackwright init`
 # (fixtures under tests/fixtures commit their own .trackwright/ on purpose)
 /.trackwright/evidence/
