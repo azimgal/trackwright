@@ -1,0 +1,55 @@
+{
+  "name": "trackwright",
+  "version": "0.1.0",
+  "description": "A Claude-first orchestration wrapper that moves tickets through a declarative development lifecycle (Planning -> ... -> Awaiting Merge -> Done), with independent verification and machine-enforced gates.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "trackwright": "./dist/cli/index.js",
+    "tw": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "agentic",
+    "orchestration",
+    "workflow",
+    "ticket",
+    "spec-driven",
+    "ci",
+    "cli"
+  ],
+  "dependencies": {
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.7.5",
+    "@typescript-eslint/eslint-plugin": "^8.8.1",
+    "@typescript-eslint/parser": "^8.8.1",
+    "eslint": "^8.57.1",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.2"
+  }
+}
