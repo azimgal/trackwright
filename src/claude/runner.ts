@@ -1,0 +1,183 @@
+import { spawn } from 'node:child_process';
+import type { AgentInvocation, AgentResult, ClaudeRunner } from './types.js';
+
+/**
+ * Shape of the JSON envelope `claude -p --output-format json` prints to stdout. This is
+ * Claude Code's own response format, not something we invented — verified against a real
+ * invocation during development (see docs/roadmap.md). We only rely on the handful of fields
+ * used below; everything else is kept as `raw` for evidence, never parsed further.
+ */
+interface ClaudeJsonEnvelope {
+  result: string;
+  is_error: boolean;
+  duration_ms: number;
+  total_cost_usd?: number;
+  session_id: string;
+  subtype?: string;
+  permission_denials?: unknown[];
+}
+
+/**
+ * Real ClaudeRunner: spawns a fresh, isolated `claude -p` process per invocation (no persistent
+ * conversation, no shared context between stages — see docs/architecture.md, "Claude Runner").
+ * The task prompt is sent over stdin; the system prompt is appended (never replaces Claude
+ * Code's own default system prompt) via --append-system-prompt, so built-in safety framing is
+ * never silently dropped.
+ */
+export class ClaudeCliRunner implements ClaudeRunner {
+  constructor(private readonly binary: string = 'claude') {}
+
+  async invoke(invocation: AgentInvocation): Promise<AgentResult> {
+    const args = this.buildArgs(invocation);
+    const start = Date.now();
+
+    let stdout: string;
+    let stderr: string;
+    let timedOut = false;
+    try {
+      const result = await this.runProcess(args, invocation);
+      stdout = result.stdout;
+      stderr = result.stderr;
+      timedOut = result.timedOut;
+    } catch (err) {
+      return this.systemError(`failed to spawn claude: ${(err as Error).message}`, Date.now() - start);
+    }
+
+    if (timedOut) {
+      return this.systemError(
+        `claude invocation exceeded timeout of ${invocation.timeoutMs}ms and was killed`,
+        Date.now() - start,
+      );
+    }
+
+    let envelope: ClaudeJsonEnvelope;
+    try {
+      envelope = JSON.parse(stdout) as ClaudeJsonEnvelope;
+    } catch {
+      return this.systemError(
+        `claude did not return valid JSON on stdout (stderr: ${stderr.slice(0, 500)})`,
+        Date.now() - start,
+        stdout,
+      );
+    }
+
+    if (envelope.is_error) {
+      return this.systemError(
+        `claude reported is_error=true: ${envelope.result?.slice(0, 500) ?? '(no result text)'}`,
+        Date.now() - start,
+        envelope,
+      );
+    }
+
+    return this.parseAgentPayload(envelope, Date.now() - start);
+  }
+
+  /**
+   * The agent's actual answer (outcome/summary/data/failureReason) is instructed to be the
+   * *only* thing in `envelope.result`, as a single JSON object — see agents/registry.ts for the
+   * exact instruction every agent prompt ends with. This double-JSON layering (Claude Code's own
+   * envelope, then the agent's structured answer inside `result`) is the standard way to get
+   * structured output through `-p --output-format json`.
+   */
+  private parseAgentPayload(envelope: ClaudeJsonEnvelope, durationMs: number): AgentResult {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(this.extractJson(envelope.result)) as Record<string, unknown>;
+    } catch {
+      return this.systemError(
+        `agent response was not parseable JSON: ${envelope.result.slice(0, 500)}`,
+        durationMs,
+        envelope,
+      );
+    }
+
+    const outcome = typeof payload.outcome === 'string' ? payload.outcome : undefined;
+    if (!outcome) {
+      return this.systemError('agent response missing required "outcome" field', durationMs, envelope);
+    }
+
+    return {
+      outcome: outcome as AgentResult['outcome'],
+      summary: typeof payload.summary === 'string' ? payload.summary : '(no summary provided)',
+      data: (payload.data as Record<string, unknown>) ?? {},
+      failureReason: typeof payload.failureReason === 'string' ? payload.failureReason : undefined,
+      durationMs,
+      costUsd: envelope.total_cost_usd,
+      raw: envelope,
+    };
+  }
+
+  /** Agents are instructed to answer with only JSON, but strip incidental code-fence wrapping defensively. */
+  private extractJson(text: string): string {
+    const trimmed = text.trim();
+    const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(trimmed);
+    return fenced ? fenced[1]!.trim() : trimmed;
+  }
+
+  private systemError(reason: string, durationMs: number, raw?: unknown): AgentResult {
+    return {
+      outcome: 'SYSTEM_ERROR',
+      summary: reason,
+      data: {},
+      failureReason: reason,
+      durationMs,
+      raw,
+    };
+  }
+
+  private buildArgs(invocation: AgentInvocation): string[] {
+    const args = [
+      '-p',
+      '--output-format',
+      'json',
+      '--model',
+      invocation.model,
+      '--permission-mode',
+      invocation.permissionMode,
+      '--add-dir',
+      invocation.cwd,
+      '--append-system-prompt',
+      invocation.systemPrompt,
+    ];
+    if (invocation.allowedTools.length > 0) {
+      args.push('--allowedTools', ...invocation.allowedTools);
+    }
+    if (invocation.disallowedTools.length > 0) {
+      args.push('--disallowedTools', ...invocation.disallowedTools);
+    }
+    return args;
+  }
+
+  private runProcess(
+    args: string[],
+    invocation: AgentInvocation,
+  ): Promise<{ stdout: string; stderr: string; timedOut: boolean }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(this.binary, args, {
+        cwd: invocation.cwd,
+        timeout: invocation.timeoutMs,
+        windowsHide: true,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+
+      child.on('error', reject);
+      child.on('close', (code, signal) => {
+        if (signal === 'SIGTERM' || signal === 'SIGKILL') timedOut = true;
+        resolve({ stdout, stderr: stderr + (code !== 0 && !timedOut ? `\n(exit code ${code})` : ''), timedOut });
+      });
+
+      child.stdin.write(invocation.prompt);
+      child.stdin.end();
+    });
+  }
+}
