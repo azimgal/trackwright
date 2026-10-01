@@ -201,7 +201,8 @@ export class WorkflowEngine {
         status: result.outcome === 'CANCELLED' ? 'cancelled' : ticket.frontmatter.status,
       },
     };
-    await this.deps.ticketStore.save(updated);
+    const saved = await this.deps.ticketStore.save(updated);
+    await this.commitTicketState(saved, stage, toStage, result.outcome);
 
     return {
       ticketId: ticket.frontmatter.id,
@@ -279,9 +280,20 @@ export class WorkflowEngine {
     return `${diff.slice(0, limit)}\n\n...[diff truncated at ${limit} of ${diff.length} chars — see evidence for the full record]`;
   }
 
+  /**
+   * The SHA every staleness check (design staleness here, verification staleness in
+   * executeAwaitingMerge) and every evidence record compares against. Deliberately
+   * `lastRelevantSha` (excluding CONFIG_DIR), not raw `currentSha()` — found via a post-DF-0007
+   * hardening review's cross-fix interaction check: once commitTicketState (this file) started
+   * committing ticket-state on every stage transition, raw HEAD moved on every single step even
+   * when no real project file changed, which made both staleness checks fire on Trackwright's own
+   * bookkeeping commits — a design or verification that had not actually gone stale would
+   * incorrectly bounce back for no real reason, on every ticket, every time. "Has the project
+   * changed" must never be answered by "has literally anything been committed."
+   */
   private async safeSha(): Promise<string | null> {
     try {
-      return await this.deps.gitRepo.currentSha();
+      return await this.deps.gitRepo.lastRelevantSha([CONFIG_DIR]);
     } catch {
       return null;
     }
@@ -645,6 +657,43 @@ export class WorkflowEngine {
   private async executeCodeReview(ticket: Ticket): Promise<AgentResult> {
     const diff = await this.projectDiff();
     return this.executeClaudeAgent('code-reviewer', ticket, { diff }, 'code-review');
+  }
+
+  /**
+   * Architectural decision from a post-DF-0007 hardening review (not applied reflexively just
+   * because a gap existed): docs/architecture.md calls the ticket file the project's "source of
+   * truth," and `ticket create`/`init` already commit their own bookkeeping output for exactly
+   * that reason — via GitRepo.addPaths, built specifically to stage Trackwright's own files
+   * without ever sweeping up unrelated project work. But every per-stage ticket-state write `run`
+   * itself makes (ticketStore.save above) was never wired to that same mechanism, leaving
+   * in-flight stage progress sitting only in the working tree for as long as a ticket takes to
+   * finish. After the ensureWorkBranch fix elsewhere in this file, that is a durability/audit gap,
+   * not a correctness one — nothing is lost on crash, since the next `run` re-reads the ticket
+   * file from disk regardless of git state — but it conflicts with the ticket-as-source-of-truth
+   * principle, and the fix is narrow enough (one already-existing, narrowly-scoped mechanism,
+   * wired to one additional call site) to be worth closing rather than leaving open.
+   *
+   * Deliberately NOT extended to evidence: `.trackwright/evidence/` is gitignored by design (see
+   * this repo's own dogfood target's .gitignore) — evidence is local/ephemeral audit data, never
+   * meant to be a shared, committed artifact, unlike a ticket's Requirements/Acceptance
+   * Criteria/Plan/Tasks. Deliberately NOT a separate state ref/branch either — no real-usage
+   * evidence suggests ticket files need to live outside the normal project history, and a second
+   * ref would be meaningfully more MVP scope than this warrants.
+   *
+   * Best-effort and narrowly scoped: stages and commits only this one ticket's own file (never
+   * -A), and a failure here (no git identity configured, mid-merge, etc.) never fails the step —
+   * the ticket's actual state is already safely on disk via ticketStore.save above regardless.
+   */
+  private async commitTicketState(ticket: Ticket, fromStage: Stage, toStage: Stage, outcome: RunOutcome): Promise<void> {
+    if (!ticket.filePath) return;
+    try {
+      if (!(await this.deps.gitRepo.isGitRepository())) return;
+      if (!(await this.deps.gitRepo.hasChangesIn([ticket.filePath]))) return;
+      await this.deps.gitRepo.addPaths([ticket.filePath]);
+      await this.deps.gitRepo.commit(`chore(trackwright): ${ticket.frontmatter.id} ${fromStage} -> ${toStage} [${outcome}]`);
+    } catch {
+      // Best-effort — see doc comment above. The ticket's state is already durable on disk.
+    }
   }
 
   private async executeVerification(ticket: Ticket): Promise<AgentResult> {

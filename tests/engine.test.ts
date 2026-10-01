@@ -51,7 +51,16 @@ async function initGitRepo() {
   await git(['init', '-q']);
   await git(['config', 'user.email', 'test@example.com']);
   await git(['config', 'user.name', 'Test']);
-  await git(['commit', '--allow-empty', '-m', 'initial', '-q']);
+  // A real tracked file, not --allow-empty: GitRepo.lastRelevantSha (what every staleness check
+  // and evidence.gitSha now uses, excluding CONFIG_DIR — see engine.ts's safeSha) walks `git log`
+  // filtered to non-bookkeeping paths, and an empty commit matches no pathspec at all. Without a
+  // real baseline file, lastRelevantSha stays null until a test's own first real file change,
+  // which made every staleness check vacuously "not stale" (see isStale's early return on a
+  // falsy gitSha) regardless of what happened afterward — not what any of those tests mean to
+  // exercise.
+  await writeFile(path.join(projectRoot, 'README.md'), 'placeholder project content\n', 'utf8');
+  await git(['add', '-A']);
+  await git(['commit', '-m', 'initial', '-q']);
 }
 
 beforeEach(async () => {
@@ -63,7 +72,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectRoot, { recursive: true, force: true });
+  // maxRetries/retryDelay: Windows can briefly hold a lock on a just-exited git subprocess's
+  // working directory (antivirus/indexing) — this suite now spawns noticeably more git
+  // subprocesses per test (ticket-state auto-commit on every real stage transition, not just
+  // once), which made this transient EBUSY/EPERM on cleanup show up where it hadn't before.
+  await rm(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 async function createReadyTicket(id: string) {
@@ -318,13 +331,54 @@ describe('WorkflowEngine Awaiting Merge', () => {
     }
     expect(step.fromStage).toBe('verification');
 
-    // Simulate code changing after verification approved it.
+    // Simulate code changing after verification approved it. A real file change, not
+    // `--allow-empty`: staleness is now computed from the last commit that touched anything
+    // outside .trackwright/ (GitRepo.lastRelevantSha) specifically so Trackwright's own
+    // per-step ticket-state commits (commitTicketState) can never themselves look like "the
+    // project changed" — an empty commit wouldn't match that pathspec-filtered log at all, so it
+    // would no longer exercise what this test is actually about.
     const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
-    await git(['commit', '--allow-empty', '-m', 'a change that happened after verification', '-q']);
+    await writeFile(path.join(projectRoot, 'post-verification-change.txt'), 'real change\n', 'utf8');
+    await git(['add', '-A']);
+    await git(['commit', '-m', 'a change that happened after verification', '-q']);
 
     const staleStep = await engine.step('TW-0044');
     expect(staleStep.outcome).toBe('VERIFICATION_FAILED');
     expect(staleStep.toStage).toBe('testing');
+  });
+
+  /**
+   * Cross-fix interaction regression: found while hardening after DF-0007. Before GitRepo's
+   * lastRelevantSha fix, commitTicketState's own per-step ticket-state commit moved raw HEAD
+   * between Verification recording its evidence SHA and Awaiting Merge checking staleness
+   * against it — so EVERY ticket would appear stale at Awaiting Merge, every time, for no real
+   * reason, immediately bouncing back to Testing and eventually exhausting the retry ceiling.
+   * This asserts the inverse of the test above: reaching Awaiting Merge at all, through several
+   * real per-step bookkeeping commits (one per stage transition driven below), must NOT by
+   * itself look stale.
+   */
+  it('reaching awaiting-merge through several real ticket-state commits is never itself stale', async () => {
+    await createReadyTicket('TW-0045');
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('verification-agent', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    const result = await engine.run('TW-0045', { maxSteps: 10 });
+
+    // Each of these transitions, including development->code-review and verification->
+    // awaiting-merge, produced its own real commitTicketState commit (ticket bookkeeping only —
+    // no real project file ever changed in this mocked run). None of that should register as
+    // project staleness anywhere along the way.
+    const awaitingMergeStep = result.steps.find((s) => s.fromStage === 'awaiting-merge');
+    expect(awaitingMergeStep?.outcome).toBe('SUCCESS');
+    expect(result.ticket.frontmatter.stage).toBe('done');
+
+    const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
+    const { stdout: log } = await git(['log', '--oneline']);
+    expect(log.split('\n').filter(Boolean).length).toBeGreaterThan(5); // several real bookkeeping commits happened
   });
 
   it('a failing premerge check keeps the ticket at awaiting-merge with RETRYABLE_FAILURE', async () => {

@@ -17,6 +17,22 @@ export class GitRepo {
     return this.git(['rev-parse', 'HEAD']);
   }
 
+  /**
+   * The SHA of the most recent commit that touched anything outside `excludePathPrefixes`, or
+   * `null` if no such commit exists (e.g. only bookkeeping commits so far). Distinct from
+   * `currentSha()`: once Trackwright commits its own bookkeeping on every stage transition (see
+   * workflow/engine.ts, commitTicketState), raw HEAD moves on every single step even when no real
+   * project file changed, which breaks any staleness check built on "has the SHA changed since
+   * then" — that check means "has the *project* changed," not "has literally anything, including
+   * Trackwright's own ticket-state commit, happened since then."
+   */
+  async lastRelevantSha(excludePathPrefixes: readonly string[] = []): Promise<string | null> {
+    const pathspecs = excludePathPrefixes.map((p) => `:(exclude)${p}`);
+    const pathArgs = pathspecs.length > 0 ? ['--', '.', ...pathspecs] : [];
+    const sha = await this.git(['log', '-1', '--format=%H', ...pathArgs]);
+    return sha.length > 0 ? sha : null;
+  }
+
   async currentBranch(): Promise<string> {
     return this.git(['rev-parse', '--abbrev-ref', 'HEAD']);
   }

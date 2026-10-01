@@ -85,3 +85,50 @@ describe('GitRepo.diffAgainstBase exclude paths', () => {
     expect(diff).toContain('routes.mjs');
   });
 });
+
+/**
+ * Regression coverage for a cross-fix interaction found during post-DF-0007 hardening: once
+ * Trackwright started auto-committing ticket state on every stage transition
+ * (workflow/engine.ts, commitTicketState), raw `currentSha()` moved on every single step even
+ * when no real project file changed — which broke both the verification-staleness and
+ * design-staleness checks in engine.ts, which exist specifically to answer "has the *project*
+ * changed," not "has anything at all been committed." `lastRelevantSha` is the fix those checks
+ * now use instead of `currentSha()`.
+ */
+describe('GitRepo.lastRelevantSha', () => {
+  it('ignores commits that only touch an excluded path', async () => {
+    const before = await repo.lastRelevantSha(['.trackwright']);
+    await commitChange('.trackwright/tickets/TW-0001.md', 'bookkeeping only\n', 'bookkeeping');
+    const after = await repo.lastRelevantSha(['.trackwright']);
+    expect(after).toBe(before); // unchanged — the bookkeeping-only commit must not count
+  });
+
+  it('picks up a commit that touches a non-excluded path', async () => {
+    const before = await repo.lastRelevantSha(['.trackwright']);
+    await commitChange('routes.mjs', 'export const real = true;\n', 'real change');
+    const after = await repo.lastRelevantSha(['.trackwright']);
+    expect(after).not.toBe(before);
+    expect(after).toBe(await repo.currentSha());
+  });
+
+  it('is null when no commit has ever touched a non-excluded path', async () => {
+    // A fresh repo whose only commit is bookkeeping-only (e.g. right after `trackwright init`,
+    // before any real project file has ever been committed).
+    const dir = await mkdtemp(path.join(tmpdir(), 'trackwright-git-repo-empty-'));
+    try {
+      const git = (args: string[]) => execFileAsync('git', args, { cwd: dir });
+      await git(['init', '-q']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await mkdir(path.join(dir, '.trackwright'), { recursive: true });
+      await writeFile(path.join(dir, '.trackwright', 'config.yaml'), 'ticketPrefix: TW\n', 'utf8');
+      await git(['add', '-A']);
+      await git(['commit', '-m', 'init bookkeeping only', '-q']);
+
+      const emptyRepo = new GitRepo(dir);
+      expect(await emptyRepo.lastRelevantSha(['.trackwright'])).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
