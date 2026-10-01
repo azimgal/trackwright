@@ -53,6 +53,27 @@ describe('EvidenceStore', () => {
     expect(await store.attemptCount('TW-0001', 'development')).toBe(2);
   });
 
+  it('only counts attempts since the most recent RETRY_RESET', async () => {
+    await record({ outcome: 'SYSTEM_ERROR' });
+    await record({ outcome: 'SYSTEM_ERROR' });
+    await record({ outcome: 'SYSTEM_ERROR' });
+    expect(await store.attemptCount('TW-0001', 'development')).toBe(3);
+
+    await record({ outcome: 'RETRY_RESET', agent: 'human', summary: 'reset by human: limit cleared' });
+    expect(await store.attemptCount('TW-0001', 'development')).toBe(0);
+
+    await record({ outcome: 'SYSTEM_ERROR' });
+    expect(await store.attemptCount('TW-0001', 'development')).toBe(1);
+  });
+
+  it('RETRY_RESET does not affect a different stage for the same ticket', async () => {
+    await record({ stage: 'development', outcome: 'SYSTEM_ERROR' });
+    await record({ stage: 'development', outcome: 'RETRY_RESET', agent: 'human', summary: 'reset' });
+    await record({ stage: 'testing', outcome: 'RETRYABLE_FAILURE' });
+    expect(await store.attemptCount('TW-0001', 'development')).toBe(0);
+    expect(await store.attemptCount('TW-0001', 'testing')).toBe(1);
+  });
+
   it('detects staleness against the last SUCCESS git SHA', async () => {
     await record({ outcome: 'SUCCESS', gitSha: 'sha-a' });
     expect(await store.isStale('TW-0001', 'development', 'sha-a')).toBe(false);
@@ -71,5 +92,15 @@ describe('hasExceededCeiling', () => {
     expect(await hasExceededCeiling(store, 'TW-0001', 'development', 3)).toBe(false);
     await record({ outcome: 'RETRYABLE_FAILURE' });
     expect(await hasExceededCeiling(store, 'TW-0001', 'development', 3)).toBe(true);
+  });
+
+  it('returns to false after a human RETRY_RESET', async () => {
+    await record({ outcome: 'SYSTEM_ERROR' });
+    await record({ outcome: 'SYSTEM_ERROR' });
+    await record({ outcome: 'SYSTEM_ERROR' });
+    expect(await hasExceededCeiling(store, 'TW-0001', 'development', 3)).toBe(true);
+
+    await record({ outcome: 'RETRY_RESET', agent: 'human', summary: 'reset' });
+    expect(await hasExceededCeiling(store, 'TW-0001', 'development', 3)).toBe(false);
   });
 });

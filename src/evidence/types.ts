@@ -9,12 +9,13 @@ export interface EvidenceRecord {
   startedAt: string;
   endedAt: string;
   /**
-   * WAIVED is deliberately NOT part of RunOutcome/FailureOutcome — it can never be a value an
-   * agent or the state machine's nextStage() produces (that function's type signature excludes
-   * it). The only writer of a WAIVED evidence record is the explicit `trackwright ticket waive`
-   * CLI command, which a human runs by hand. See workflow/engine.ts.
+   * WAIVED and RETRY_RESET are deliberately NOT part of RunOutcome/FailureOutcome — neither can
+   * ever be a value an agent or the state machine's nextStage() produces (that function's type
+   * signature excludes them). The only writer of a WAIVED record is `trackwright ticket waive`;
+   * the only writer of a RETRY_RESET record is `trackwright ticket retry` — both are explicit CLI
+   * commands a human runs by hand. See workflow/engine.ts and evidence/store.ts (attemptCount).
    */
-  outcome: RunOutcome | 'WAIVED';
+  outcome: RunOutcome | 'WAIVED' | 'RETRY_RESET';
   attempt: number;
   artifacts: string[];
   gitSha: string | null;

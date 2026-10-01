@@ -5,6 +5,7 @@ import { runTicketCreate } from './commands/ticket-create.js';
 import { runTicketList, runTicketShow } from './commands/ticket-list.js';
 import { runTicketRun } from './commands/run.js';
 import { runTicketWaive } from './commands/waive.js';
+import { runTicketRetry } from './commands/ticket-retry.js';
 import { runDesignApprove, runDesignList, runDesignShow } from './commands/design.js';
 
 const program = new Command();
@@ -78,6 +79,19 @@ ticket
   .action(async (id, opts) => {
     try {
       console.log(await runTicketWaive(opts.cwd, id, opts.reason));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+ticket
+  .command('retry <id>')
+  .description('Human-only: reset a retry ceiling exceeded by transient failures (e.g. a session limit), so `run` can resume the ticket\'s current stage.')
+  .requiredOption('-r, --reason <reason>', 'why it is safe to retry now (e.g. the underlying rate limit has reset)')
+  .option('-C, --cwd <dir>', 'project root', process.cwd())
+  .action(async (id, opts) => {
+    try {
+      console.log(await runTicketRetry(opts.cwd, id, opts.reason));
     } catch (err) {
       fail(err);
     }

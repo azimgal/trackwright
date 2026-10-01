@@ -43,14 +43,25 @@ export class EvidenceStore {
   }
 
   /**
-   * Count of non-SUCCESS attempts recorded for (ticketId, stage) — the input to the retry
-   * ceiling (see policies/retry.ts). Counting from durable evidence rather than an in-memory
-   * counter means the ceiling survives a process restart, which matters for the crash-recovery
-   * story described in docs/architecture.md.
+   * Count of non-SUCCESS attempts recorded for (ticketId, stage) since the most recent
+   * RETRY_RESET — the input to the retry ceiling (see policies/retry.ts). Counting from durable
+   * evidence rather than an in-memory counter means the ceiling survives a process restart, which
+   * matters for the crash-recovery story described in docs/architecture.md.
+   *
+   * Windowing on the last RETRY_RESET (rather than counting all-time) matters for a distinct
+   * failure mode found during real dogfooding: a BLOCKED-by-ceiling stage caused purely by a
+   * transient SYSTEM_ERROR (e.g. hitting a Claude session rate limit) has no automatic way to
+   * recover once the external condition clears — the ceiling, counted from the full append-only
+   * history, would block that stage forever. `trackwright ticket retry` (ticket-retry.ts) lets a
+   * human record an explicit, reasoned RETRY_RESET once they've confirmed the underlying cause is
+   * resolved; nothing is ever deleted from the evidence log, so the full failure history stays
+   * auditable — only the ceiling's counting window moves forward.
    */
   async attemptCount(ticketId: string, stage: Stage): Promise<number> {
     const records = await this.historyForStage(ticketId, stage);
-    return records.filter((r) => r.outcome !== 'SUCCESS').length;
+    const lastResetIndex = records.map((r) => r.outcome).lastIndexOf('RETRY_RESET');
+    const window = lastResetIndex === -1 ? records : records.slice(lastResetIndex + 1);
+    return window.filter((r) => r.outcome !== 'SUCCESS' && r.outcome !== 'RETRY_RESET').length;
   }
 
   /** Most recent record for (ticketId, stage), or null if the stage has never run. */
