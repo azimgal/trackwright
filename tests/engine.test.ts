@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -156,6 +156,73 @@ describe('WorkflowEngine verification outcomes', () => {
 
     const ticket = await ticketStore.getOrThrow('TW-0002');
     expect(ticket.frontmatter.stage).toBe('awaiting-merge');
+  });
+});
+
+/**
+ * Regression coverage for a real gap found during the DF-0007 dogfood run: the verification
+ * agent's diff was bounded to 20k chars via a bare `.slice()`, with no exclusion of Trackwright's
+ * own `.trackwright/` bookkeeping. A ticket whose cumulative ticket-markdown/evidence content
+ * pushed the *combined* diff just past the cap meant the real project change — alphabetically
+ * after `.trackwright/...` in git's diff output — was silently cut out of the agent's prompt
+ * entirely, producing a false VERIFICATION_FAILED ("the diff doesn't show the required change")
+ * for a change that was actually present on disk and in git, just never shown to the agent.
+ */
+describe('WorkflowEngine verification diff scope', () => {
+  async function commit(relPath: string, content: string, message: string) {
+    const full = path.join(projectRoot, relPath);
+    await mkdir(path.dirname(full), { recursive: true });
+    await writeFile(full, content, 'utf8');
+    const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
+    await git(['add', '-A']);
+    await git(['commit', '-m', message, '-q']);
+  }
+
+  beforeEach(async () => {
+    // Diverge onto a dedicated branch, same as a real ticket run would (ensureWorkBranch) —
+    // committing directly on initGitRepo's base branch would make `<base>...HEAD` trivially
+    // empty (merge-base(base, base) === base === HEAD), masking the very diff this suite tests.
+    const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
+    await git(['checkout', '-q', '-b', 'trackwright/tw-0003']);
+  });
+
+  async function advanceToVerification(runner: MockClaudeRunner) {
+    await createReadyTicket('TW-0003');
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+  }
+
+  it('excludes .trackwright/ bookkeeping from the diff the verification agent sees', async () => {
+    const runner = new MockClaudeRunner();
+    // Note: deliberately NOT under .trackwright/tickets — TicketStore.list() parses every file
+    // there as a ticket, which would break this test for a reason unrelated to what it covers.
+    await commit('.trackwright/evidence-note.md', 'ticket bookkeeping content\n', 'bookkeeping');
+    await commit('routes.mjs', 'export const realChange = true;\n', 'the actual project change');
+    await advanceToVerification(runner);
+    runner.enqueueFor('verification-agent', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    await engine.run('TW-0003');
+
+    const verificationCall = runner.invocations.find((i) => i.agentName === 'verification-agent')!;
+    expect(verificationCall.prompt).not.toContain('bookkeeping content');
+    expect(verificationCall.prompt).toContain('realChange');
+  });
+
+  it('marks the diff as truncated, visibly, instead of silently cutting it', async () => {
+    const runner = new MockClaudeRunner();
+    // A single project file whose own diff alone exceeds the 20k cap — exclusion alone can't help
+    // here, so the truncation marker is what keeps this failure mode diagnosable.
+    await commit('routes.mjs', `export const big = "${'x'.repeat(21_000)}";\n`, 'a large real change');
+    await advanceToVerification(runner);
+    runner.enqueueFor('verification-agent', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    await engine.run('TW-0003');
+
+    const verificationCall = runner.invocations.find((i) => i.agentName === 'verification-agent')!;
+    expect(verificationCall.prompt).toContain('diff truncated at 20000');
   });
 });
 

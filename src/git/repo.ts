@@ -85,19 +85,34 @@ export class GitRepo {
     }
   }
 
-  /** Diff against the first existing candidate base branch, falling back to the last commit. */
-  async diffAgainstBase(candidates: readonly string[] = ['main', 'master']): Promise<string> {
+  /**
+   * Diff against the first existing candidate base branch, falling back to the last commit.
+   * `excludePathPrefixes` drops the given paths from the diff entirely (same `:(exclude)`
+   * pathspec mechanism as `hasUncommittedChanges`) — callers that feed this diff to a Claude
+   * agent with a bounded prompt size (see workflow/engine.ts, executeVerification) should always
+   * exclude Trackwright's own bookkeeping paths (tickets/evidence/config), or that content can
+   * silently crowd out the actual project diff the agent is meant to review. Found via real
+   * dogfooding: a ticket whose cumulative `.trackwright/tickets/*.md` + evidence content pushed
+   * the combined diff just past the 20k-char cap meant the real code change (alphabetically last)
+   * never reached the verification agent at all, producing a false VERIFICATION_FAILED.
+   */
+  async diffAgainstBase(
+    candidates: readonly string[] = ['main', 'master'],
+    excludePathPrefixes: readonly string[] = [],
+  ): Promise<string> {
+    const pathspecs = excludePathPrefixes.map((p) => `:(exclude)${p}`);
+    const pathArgs = pathspecs.length > 0 ? ['--', '.', ...pathspecs] : [];
     for (const base of candidates) {
       if (await this.branchExists(base)) {
         try {
-          return await this.git(['diff', `${base}...HEAD`]);
+          return await this.git(['diff', `${base}...HEAD`, ...pathArgs]);
         } catch {
           // fall through to the next candidate or the HEAD~1 fallback below
         }
       }
     }
     try {
-      return await this.git(['diff', 'HEAD~1', 'HEAD']);
+      return await this.git(['diff', 'HEAD~1', 'HEAD', ...pathArgs]);
     } catch {
       return '';
     }

@@ -12,6 +12,7 @@ import type { ClaudeRunner, AgentInvocation, AgentResult } from '../claude/types
 import type { EvidenceStore } from '../evidence/store.js';
 import type { GitRepo } from '../git/repo.js';
 import type { ProjectConfig } from '../config/schema.js';
+import { CONFIG_DIR } from '../config/loader.js';
 import { nextStage, runnerFor, IllegalTransitionError } from './state-machine.js';
 import type { RunOutcome } from './outcomes.js';
 import { RUN_OUTCOMES, type FailureOutcome } from './outcomes.js';
@@ -263,6 +264,19 @@ export class WorkflowEngine {
       }
       throw err;
     }
+  }
+
+  /**
+   * Bound prompt size (evidence keeps the full record separately) — but never silently. A bare
+   * `.slice()` previously cut mid-hunk with no indication anything was missing, which during real
+   * dogfooding produced a verification agent confidently reporting a file's change was absent
+   * when it had in fact just been truncated out of its prompt. Surfacing the cut explicitly lets
+   * the agent (and a human reading evidence) tell "this file genuinely has no changes" apart from
+   * "this file's changes were cut off."
+   */
+  private boundDiff(diff: string, limit = 20_000): string {
+    if (diff.length <= limit) return diff;
+    return `${diff.slice(0, limit)}\n\n...[diff truncated at ${limit} of ${diff.length} chars — see evidence for the full record]`;
   }
 
   private async safeSha(): Promise<string | null> {
@@ -573,13 +587,17 @@ export class WorkflowEngine {
   }
 
   private async executeVerification(ticket: Ticket): Promise<AgentResult> {
-    const diff = await this.deps.gitRepo.diffAgainstBase();
+    // Exclude Trackwright's own bookkeeping (tickets/evidence/config, all under CONFIG_DIR by
+    // default) from the diff the verification agent sees — otherwise that content competes with
+    // the actual project diff for the same bounded prompt budget (boundDiff below), and the real
+    // code change can be silently truncated away entirely. See GitRepo.diffAgainstBase.
+    const diff = await this.deps.gitRepo.diffAgainstBase(undefined, [CONFIG_DIR]);
     const testEvidence = await this.deps.evidenceStore.latestForStage(ticket.frontmatter.id, 'testing');
     const result = await this.executeClaudeAgent(
       'verification-agent',
       ticket,
       {
-        diff: diff.slice(0, 20_000), // bound prompt size; evidence keeps the full record separately
+        diff: this.boundDiff(diff),
         testEvidence: testEvidence ? JSON.stringify(testEvidence) : '(no testing evidence recorded)',
       },
       'verification',
