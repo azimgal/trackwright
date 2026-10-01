@@ -35,6 +35,30 @@ export interface AgentDefinition {
  * being told about the previous attempt's failure (see engine.ts, previousFailureNote). One
  * unified, concrete example is measurably stickier than two abstract, separately-stated parts.
  */
+/**
+ * Shared warning against prefixing a scoped Bash command with `cd ... &&`. Every agent here
+ * already runs with its cwd set to the project root (see AgentInvocation.cwd in engine.ts), but
+ * found via real dogfooding (DF-0007): the model prefixes shell commands with `cd "<path>" &&`
+ * anyway, out of habit. Doing so makes the whole command no longer match a scoped allowedTools
+ * pattern like `Bash(git diff*)` (the string no longer starts with `git diff`), so it is silently
+ * denied — `permission_denials` shows up in evidence, but nothing tells the agent *why*, and
+ * (confirmed via real runs: code-reviewer twice, verification-agent once, all on DF-0007) an
+ * agent can still report a clean outcome having silently fallen back to Read-ing files instead of
+ * actually running the command it needed. This warning was previously implementer-only — the
+ * exact same failure recurring on two other Bash-using agents is why it is now a shared helper
+ * every Bash-using agent's prompt calls, instead of being re-derived (or forgotten) per agent.
+ */
+function noCdPrefixWarning(commandExamples: string): string {
+  return (
+    `\n\nYour working directory is already this project's root — run ${commandExamples} as ` +
+    `standalone commands, never prefixed with \`cd ... &&\`. A leading \`cd\` makes the whole ` +
+    `command fail your permission check (it stops matching your pre-approved command patterns), ` +
+    `so it will be silently blocked with no error shown to you — any commit you believed you just ` +
+    `made, or any content you believed you just inspected, did not actually happen. If a command ` +
+    `you needed might have been blocked, say so explicitly rather than reporting as if it ran.`
+  );
+}
+
 function outputContract(outcomes: readonly RunOutcome[]): string {
   return `
 You must respond with ONLY a single JSON object, no markdown fences, no prose before or after it.
@@ -151,12 +175,9 @@ You MUST commit your changes (\`git add\` the specific files you changed, then \
 you finish, with a commit message referencing this ticket's id. Later stages (code review, testing,
 independent verification) read \`git diff\` against the base branch, not your uncommitted working
 tree — if you don't commit, they will see an empty diff and the ticket will incorrectly appear to
-have no changes at all, even though you did real work.
-
-Your working directory is already this project's root — run \`git add ...\` and \`git commit ...\` as
-their own standalone commands, never prefixed with \`cd ... &&\`. A leading \`cd\` makes the whole
-command fail your permission check (it stops matching the pre-approved git-command patterns), so
-the add/commit will be silently blocked and none of your work will actually be saved.` + outputContract(this.validOutcomes);
+have no changes at all, even though you did real work.` +
+        noCdPrefixWarning('`git add ...` and `git commit ...`') +
+        outputContract(this.validOutcomes);
     },
     buildTaskPrompt(ctx) {
       return `Ticket ${ctx.ticket.frontmatter.id}: ${ctx.ticket.frontmatter.title}
@@ -195,13 +216,21 @@ const CODE_REVIEWER: AgentDefinition = {
 regression risk in the diff for this ticket. You do not run tests and you do not judge whether the
 ticket's intent was fulfilled (that is a separate, independent verification step you have no
 visibility into). If you find blocking issues, outcome is RETRYABLE_FAILURE and they route back to
-implementation.` + outputContract(this.validOutcomes);
+implementation.
+
+The diff you need to review is already provided below in your task prompt — you do not need to
+run \`git diff\` yourself to get it. \`git log\`/\`git diff\` remain available if you want extra
+history or context beyond what's given, but they are optional, not your primary source.` +
+      noCdPrefixWarning('`git diff ...` and `git log ...`') +
+      outputContract(this.validOutcomes);
   },
   buildTaskPrompt(ctx) {
     return `Ticket ${ctx.ticket.frontmatter.id}: ${ctx.ticket.frontmatter.title}
 
-Review the current diff in this repository (\`git diff\` against the base branch) for quality,
-architecture, security, and regressions.
+Review this diff for quality, architecture, security, and regressions.
+
+## Diff
+${ctx.extra?.diff ?? '(no diff provided)'}
 ${concreteEnvelopeExample({ findings: 'a short list of findings, or "none" if the diff is clean' })}`;
   },
 };
@@ -234,7 +263,11 @@ as shown (never a paraphrase like "PASS", "FAIL", or "FAILURE"; those are not va
 - "SUCCESS" — the diff satisfies every Acceptance Criterion and Definition of Done item.
 - "VERIFICATION_FAILED" — it clearly does not.
 - "CONCERNS" — real doubt, but not clearly wrong; this blocks automatic progress and needs a human.
-- "SYSTEM_ERROR" — you cannot evaluate at all.` +
+- "SYSTEM_ERROR" — you cannot evaluate at all.
+
+The diff and test evidence you need are already provided below in your task prompt — you do not
+need to run \`git diff\` yourself to get them.` +
+      noCdPrefixWarning('`git diff ...`') +
       outputContract(this.validOutcomes);
   },
   buildTaskPrompt(ctx) {

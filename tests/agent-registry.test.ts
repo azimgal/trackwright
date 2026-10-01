@@ -30,3 +30,30 @@ describe('verification-agent system prompt', () => {
     expect(prompt).toMatch(/paraphrase.*"PASS".*"FAIL".*"FAILURE".*not valid/s);
   });
 });
+
+/**
+ * Regression coverage for a real gap found three times during the DF-0007 dogfood run: the
+ * "don't prefix a scoped Bash command with `cd ... &&`" warning (see noCdPrefixWarning in
+ * registry.ts) previously existed only in the implementer's system prompt. code-reviewer and
+ * verification-agent — which also run scoped `Bash(git diff*)`/`Bash(git log*)` commands — did
+ * not have it, and real evidence from the DF-0007 run (.trackwright/evidence/DF-0007.jsonl)
+ * recorded permission_denials for exactly this `cd "..." && git ...` pattern on both agents, each
+ * still returning SUCCESS (the model noticed and disclosed the gap in its own summary each time,
+ * but that is not a guarantee). Every Bash-using agent's prompt must carry this warning.
+ */
+describe('Bash-using agents all warn against a leading "cd"', () => {
+  it.each(['implementer.backend', 'code-reviewer', 'verification-agent'])(
+    '%s system prompt warns against prefixing commands with "cd ... &&"',
+    (agentName) => {
+      const prompt = getAgent(agentName).buildSystemPrompt();
+      expect(prompt).toMatch(/never prefixed with `cd \.\.\. &&`/);
+      expect(prompt).toContain('silently blocked');
+    },
+  );
+
+  it('design-gate-agent has no Bash access, so needs no such warning', () => {
+    const agent = getAgent('design-gate-agent');
+    expect(agent.allowedTools.some((t) => t.startsWith('Bash'))).toBe(false);
+    expect(agent.disallowedTools).toContain('Bash');
+  });
+});

@@ -193,7 +193,7 @@ describe('WorkflowEngine verification diff scope', () => {
     runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
   }
 
-  it('excludes .trackwright/ bookkeeping from the diff the verification agent sees', async () => {
+  it('excludes .trackwright/ bookkeeping from the diff both code-review and verification see', async () => {
     const runner = new MockClaudeRunner();
     // Note: deliberately NOT under .trackwright/tickets — TicketStore.list() parses every file
     // there as a ticket, which would break this test for a reason unrelated to what it covers.
@@ -208,9 +208,17 @@ describe('WorkflowEngine verification diff scope', () => {
     const verificationCall = runner.invocations.find((i) => i.agentName === 'verification-agent')!;
     expect(verificationCall.prompt).not.toContain('bookkeeping content');
     expect(verificationCall.prompt).toContain('realChange');
+
+    // Found via real dogfooding: code-review previously got no engine-provided diff at all and
+    // had to run its own live `git diff` via a scoped Bash tool call — which was twice silently
+    // denied in the real DF-0007 run (see noCdPrefixWarning in registry.ts). It now gets the same
+    // engine-computed, excluded diff verification does.
+    const codeReviewCall = runner.invocations.find((i) => i.agentName === 'code-reviewer')!;
+    expect(codeReviewCall.prompt).not.toContain('bookkeeping content');
+    expect(codeReviewCall.prompt).toContain('realChange');
   });
 
-  it('marks the diff as truncated, visibly, instead of silently cutting it', async () => {
+  it('marks the diff as truncated, visibly, instead of silently cutting it, for both stages', async () => {
     const runner = new MockClaudeRunner();
     // A single project file whose own diff alone exceeds the 20k cap — exclusion alone can't help
     // here, so the truncation marker is what keeps this failure mode diagnosable.
@@ -223,6 +231,8 @@ describe('WorkflowEngine verification diff scope', () => {
 
     const verificationCall = runner.invocations.find((i) => i.agentName === 'verification-agent')!;
     expect(verificationCall.prompt).toContain('diff truncated at 20000');
+    const codeReviewCall = runner.invocations.find((i) => i.agentName === 'code-reviewer')!;
+    expect(codeReviewCall.prompt).toContain('diff truncated at 20000');
   });
 });
 

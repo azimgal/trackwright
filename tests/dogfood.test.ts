@@ -57,17 +57,25 @@ describe('dogfood: init -> ticket create -> run', () => {
     expect(message).toContain('Created EX-0001');
   });
 
-  it('drives the ticket through several stages automatically, without a human re-invoking each step', async () => {
-    const result = await runTicketRun(projectRoot, 'EX-0001', { dryRun: true, maxSteps: 15 });
+  it(
+    'drives the ticket through several stages automatically, without a human re-invoking each step',
+    async () => {
+      const result = await runTicketRun(projectRoot, 'EX-0001', { dryRun: true, maxSteps: 15 });
 
-    // The mock runner defaults every unconfigured agent call to SUCCESS, and this fixture's
-    // package.json scripts always exit 0, so an unconfigured dry run should sail all the way to
-    // Done — proving the full ten-stage pipeline executes without a human touching it between
-    // stages.
-    expect(result.steps.length).toBeGreaterThan(1);
-    expect(result.ticket.frontmatter.stage).toBe('done');
-    expect(result.stopReason).toBe('done');
-  });
+      // The mock runner defaults every unconfigured agent call to SUCCESS, and this fixture's
+      // package.json scripts always exit 0, so an unconfigured dry run should sail all the way to
+      // Done — proving the full ten-stage pipeline executes without a human touching it between
+      // stages.
+      expect(result.steps.length).toBeGreaterThan(1);
+      expect(result.ticket.frontmatter.stage).toBe('done');
+      expect(result.stopReason).toBe('done');
+    },
+    // Real `git diff` subprocesses now run for both code-review and verification (previously
+    // just verification) across a real, uncached git repo — the full ten-stage walk occasionally
+    // exceeds vitest's 5s default on a loaded machine. 15s gives headroom without masking an
+    // actual hang (a real hang would still time out well before that).
+    15_000,
+  );
 
   it('ticket show reflects the final state', async () => {
     const output = await runTicketShow(projectRoot, 'EX-0001');

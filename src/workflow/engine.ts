@@ -322,7 +322,7 @@ export class WorkflowEngine {
       case 'implementer':
         return this.executeImplementer(ticket);
       case 'code-reviewer':
-        return this.executeClaudeAgent('code-reviewer', ticket, {}, stage);
+        return this.executeCodeReview(ticket);
       case 'gate-runner':
         return this.executeChecks(this.deps.config.checks.test, 'development'); // routes RETRYABLE_FAILURE -> development
       case 'verification-agent':
@@ -618,18 +618,43 @@ export class WorkflowEngine {
     return status.length > 0 ? status : null;
   }
 
-  private async executeVerification(ticket: Ticket): Promise<AgentResult> {
-    // Exclude Trackwright's own bookkeeping (tickets/evidence/config, all under CONFIG_DIR by
-    // default) from the diff the verification agent sees — otherwise that content competes with
-    // the actual project diff for the same bounded prompt budget (boundDiff below), and the real
-    // code change can be silently truncated away entirely. See GitRepo.diffAgainstBase.
+  /**
+   * Same exclusion (Trackwright's own `.trackwright/` bookkeeping) and bound as the diff fed to
+   * verification — see executeVerification's doc comment and GitRepo.diffAgainstBase. Shared so
+   * neither stage can drift back out of sync with the other, and so a future diff-consuming stage
+   * gets this for free rather than needing to rediscover the same fix independently.
+   */
+  private async projectDiff(): Promise<string> {
     const diff = await this.deps.gitRepo.diffAgainstBase(undefined, [CONFIG_DIR]);
+    return this.boundDiff(diff);
+  }
+
+  /**
+   * Found via real dogfooding (the DF-0007 run): code-reviewer previously got no diff from the
+   * engine at all (`extra: {}`) and was expected to run its own live `git diff` via its scoped
+   * Bash tool access. Real evidence recorded `permission_denials` for this exact call, twice
+   * (the model prefixed it with `cd "..." &&`, same class of bug now warned against in every
+   * Bash-using agent's prompt — see noCdPrefixWarning in agents/registry.ts) — and code-reviewer
+   * still returned SUCCESS both times, falling back to reading individual files rather than ever
+   * seeing an actual diff. It disclosed the limitation honestly in its own summary both times,
+   * but that is the model being cooperative, not a guarantee. Providing the diff directly, the
+   * same way verification already does, removes code-reviewer's dependency on that Bash call
+   * succeeding at all — it is a diff review stage; it should not need a live `git diff` to do its
+   * one job.
+   */
+  private async executeCodeReview(ticket: Ticket): Promise<AgentResult> {
+    const diff = await this.projectDiff();
+    return this.executeClaudeAgent('code-reviewer', ticket, { diff }, 'code-review');
+  }
+
+  private async executeVerification(ticket: Ticket): Promise<AgentResult> {
+    const diff = await this.projectDiff();
     const testEvidence = await this.deps.evidenceStore.latestForStage(ticket.frontmatter.id, 'testing');
     const result = await this.executeClaudeAgent(
       'verification-agent',
       ticket,
       {
-        diff: this.boundDiff(diff),
+        diff,
         testEvidence: testEvidence ? JSON.stringify(testEvidence) : '(no testing evidence recorded)',
       },
       'verification',
