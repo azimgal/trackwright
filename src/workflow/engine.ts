@@ -583,7 +583,39 @@ export class WorkflowEngine {
       if (fastCheck.outcome !== 'SUCCESS') return fastCheck;
     }
 
+    const uncommitted = await this.uncommittedProjectChanges();
+    if (uncommitted) {
+      return {
+        outcome: 'RETRYABLE_FAILURE',
+        summary: 'implementer reported SUCCESS but left uncommitted changes in the working tree',
+        data: {},
+        failureReason:
+          `You must \`git commit\` your changes before finishing — later stages (code review, testing, ` +
+          `verification) read \`git diff\` against the base branch, not your uncommitted working tree, ` +
+          `so they will not see this work at all. Uncommitted files:\n${uncommitted}`,
+        durationMs: 0,
+      };
+    }
+
     return { outcome: 'SUCCESS', summary: `${agentNames.length} implementer(s) completed`, data: {}, durationMs: 0 };
+  }
+
+  /**
+   * Found via real dogfooding (the DF-0007 run): despite the implementer's system prompt
+   * explicitly instructing it to commit before finishing, it twice reported SUCCESS while leaving
+   * real edits uncommitted — silently invisible to every stage downstream, since Code Review,
+   * Testing (via the live filesystem, so it happened to still pass), and Verification (via `git
+   * diff`, which did not) all disagree about what "the diff" even is. Catching this
+   * deterministically here, rather than trusting the agent's self-report, turns a silent gap into
+   * an ordinary RETRYABLE_FAILURE with a concrete instruction, self-correcting via the same
+   * previousFailureNote mechanism as any other retried stage. Returns null outside a git repo
+   * (nothing to check) or when only Trackwright's own bookkeeping changed (CONFIG_DIR), which is
+   * normal and not the implementer's concern.
+   */
+  private async uncommittedProjectChanges(): Promise<string | null> {
+    if (!(await this.deps.gitRepo.isGitRepository())) return null;
+    const status = await this.deps.gitRepo.uncommittedStatus([CONFIG_DIR]);
+    return status.length > 0 ? status : null;
   }
 
   private async executeVerification(ticket: Ticket): Promise<AgentResult> {

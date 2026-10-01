@@ -29,9 +29,16 @@ export class GitRepo {
    * project being worked on.
    */
   async hasUncommittedChanges(ignorePathPrefixes: readonly string[] = []): Promise<boolean> {
+    return (await this.uncommittedStatus(ignorePathPrefixes)).length > 0;
+  }
+
+  /** The raw `git status --porcelain` text for everything outside `ignorePathPrefixes` — empty
+   * string if clean. Same exclusion mechanism as hasUncommittedChanges, which now delegates here;
+   * split out so a caller (e.g. workflow/engine.ts's post-implementer check) can report exactly
+   * which paths are uncommitted, not just a yes/no. */
+  async uncommittedStatus(ignorePathPrefixes: readonly string[] = []): Promise<string> {
     const pathspecs = ignorePathPrefixes.map((p) => `:(exclude)${p}`);
-    const status = await this.git(['status', '--porcelain', '--', '.', ...pathspecs]);
-    return status.length > 0;
+    return this.git(['status', '--porcelain', '--', '.', ...pathspecs]);
   }
 
   async createBranch(name: string): Promise<void> {

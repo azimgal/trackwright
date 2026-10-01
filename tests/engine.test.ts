@@ -364,3 +364,58 @@ describe('WorkflowEngine ready gate', () => {
     expect(result.ticket.frontmatter.stage).toBe('ready');
   });
 });
+
+/**
+ * Regression coverage for a real gap found during the DF-0007 dogfood run: the implementer's
+ * system prompt explicitly instructs it to `git commit` before finishing, but it twice reported
+ * SUCCESS while leaving a real edit uncommitted — invisible to every git-diff-based stage
+ * downstream (Verification), even though Testing (which runs against the live filesystem) still
+ * passed. See workflow/engine.ts, uncommittedProjectChanges.
+ */
+describe('WorkflowEngine post-implementer commit check', () => {
+  async function createReadyDevTicket(id: string) {
+    const ticket = newTicket({ id, title: 'Test ticket', discipline: 'development', specialization: 'backend', context: 'ctx' });
+    await ticketStore.save({ ...ticket, frontmatter: { ...ticket.frontmatter, stage: 'development' } });
+  }
+
+  it('treats an uncommitted change left by a "SUCCESS" implementer as RETRYABLE_FAILURE', async () => {
+    await createReadyDevTicket('TW-0010');
+    // Simulate the implementer editing a real file but never committing it — MockClaudeRunner
+    // itself never touches disk, so this stands in for "the agent reported SUCCESS but skipped
+    // its own commit instruction."
+    await writeFile(path.join(projectRoot, 'left-uncommitted.txt'), 'oops\n', 'utf8');
+
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    // Self-loops back to development per the state machine — give it a second, terminal result
+    // so the test run is bounded.
+    runner.enqueueFor('implementer.backend', { outcome: 'BLOCKED', summary: 'needs human input', data: {}, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    const result = await engine.run('TW-0010', { maxSteps: 3 });
+
+    const uncommittedStep = result.steps[0]!;
+    expect(uncommittedStep.outcome).toBe('RETRYABLE_FAILURE');
+    expect(uncommittedStep.toStage).toBe('development');
+    expect(uncommittedStep.summary).toContain('uncommitted');
+  });
+
+  it('does not flag Trackwright\'s own bookkeeping as uncommitted implementer work', async () => {
+    await createReadyDevTicket('TW-0011');
+    // Trackwright's own bookkeeping (evidence, in this case) is normal, expected uncommitted
+    // content — only *project* files are the implementer's concern. Deliberately not under
+    // .trackwright/tickets: TicketStore.list() parses every file there as a ticket.
+    await mkdir(path.join(projectRoot, '.trackwright', 'evidence'), { recursive: true });
+    await writeFile(path.join(projectRoot, '.trackwright', 'evidence', 'scratch.jsonl'), '{}\n', 'utf8');
+
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('code-reviewer', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    const result = await engine.run('TW-0011', { maxSteps: 1 });
+
+    expect(result.steps[0]!.outcome).toBe('SUCCESS');
+    expect(result.steps[0]!.toStage).toBe('code-review');
+  });
+});
