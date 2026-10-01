@@ -410,6 +410,34 @@ describe('WorkflowEngine post-implementer commit check', () => {
     expect(uncommittedStep.summary).toContain('uncommitted');
   });
 
+  it('catches a mix of a tracked modification and an untracked new file left uncommitted', async () => {
+    await createReadyDevTicket('TW-0012');
+    // `git status --porcelain` reports tracked-modified (" M") and untracked ("??") files with
+    // different status codes — this confirms uncommittedStatus/hasUncommittedChanges catches
+    // both kinds together, not just the untracked-new-file case the other test covers.
+    const tracked = path.join(projectRoot, 'tracked.txt');
+    await writeFile(tracked, 'original\n', 'utf8');
+    const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
+    await git(['add', '-A']);
+    await git(['commit', '-m', 'add tracked.txt', '-q']);
+
+    await writeFile(tracked, 'original\nmodified\n', 'utf8');
+    await writeFile(path.join(projectRoot, 'left-untracked.txt'), 'oops\n', 'utf8');
+
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('implementer.backend', { outcome: 'SUCCESS', summary: 'ok', data: {}, durationMs: 1 });
+    runner.enqueueFor('implementer.backend', { outcome: 'BLOCKED', summary: 'needs human input', data: {}, durationMs: 1 });
+
+    const engine = await makeEngine(runner);
+    const result = await engine.run('TW-0012', { maxSteps: 3 });
+
+    const uncommittedStep = result.steps[0]!;
+    expect(uncommittedStep.outcome).toBe('RETRYABLE_FAILURE');
+    const [firstAttempt] = await evidenceStore.historyForStage('TW-0012', 'development');
+    expect(firstAttempt?.failureReason).toContain('tracked.txt');
+    expect(firstAttempt?.failureReason).toContain('left-untracked.txt');
+  });
+
   it('does not flag Trackwright\'s own bookkeeping as uncommitted implementer work', async () => {
     await createReadyDevTicket('TW-0011');
     // Trackwright's own bookkeeping (evidence, in this case) is normal, expected uncommitted
