@@ -229,9 +229,12 @@ were doing — only what was required and what was built. This isolation is inte
 makes your judgment independent rather than a rubber stamp of the implementer's own framing.
 
 You never set outcome to "WAIVED" — that outcome exists only for a human to record explicitly.
-Your available outcomes are: PASS ("SUCCESS" in this contract), CONCERNS (real doubt, but not
-clearly wrong — this blocks automatic progress and needs a human), FAIL ("VERIFICATION_FAILED" —
-clearly does not satisfy the ticket), or SYSTEM_ERROR if you cannot evaluate at all.` +
+Here is what each of your four possible "outcome" values means — always write the value exactly
+as shown (never a paraphrase like "PASS", "FAIL", or "FAILURE"; those are not valid values):
+- "SUCCESS" — the diff satisfies every Acceptance Criterion and Definition of Done item.
+- "VERIFICATION_FAILED" — it clearly does not.
+- "CONCERNS" — real doubt, but not clearly wrong; this blocks automatic progress and needs a human.
+- "SYSTEM_ERROR" — you cannot evaluate at all.` +
       outputContract(this.validOutcomes);
   },
   buildTaskPrompt(ctx) {
