@@ -54,12 +54,20 @@ export async function assertCurrentBranchIsSafeToRunOn(repo: GitRepo): Promise<v
 
 /**
  * Ensure a dedicated branch exists and is checked out for this ticket's work, never touching a
- * protected branch directly. Refuses outright if the repo has uncommitted changes — a `checkout`
- * to an *existing* branch can silently carry unrelated uncommitted work onto it (git only refuses
- * that checkout when there's an actual file conflict, not always), and this function has no way
- * to know whether uncommitted changes belong to this ticket or to something else the caller was
- * in the middle of. See docs/architecture.md, "Git safety": never discard, and never silently
- * relocate, work this run did not itself create.
+ * protected branch directly. Refuses outright if the repo has uncommitted changes *and* a branch
+ * switch is actually about to happen — a `checkout` to an *existing* branch can silently carry
+ * unrelated uncommitted work onto it (git only refuses that checkout when there's an actual file
+ * conflict, not always), and this function has no way to know whether uncommitted changes belong
+ * to this ticket or to something else the caller was in the middle of. See docs/architecture.md,
+ * "Git safety": never discard, and never silently relocate, work this run did not itself create.
+ *
+ * Already on the ticket's own branch? Return immediately, before any uncommitted-changes check.
+ * Found necessary via real dogfooding: `trackwright run` calls this at the start of every single
+ * step, not just the first — once Development has genuinely started, the working tree legitimately
+ * carries real in-progress changes (including, as found separately, an implementer that forgot to
+ * commit). Checking out the branch you're already on is a pure no-op for git, so there is nothing
+ * for the uncommitted-changes guard to protect against in that case; applying it anyway meant a
+ * ticket resumed mid-run could never get past this check at all.
  */
 export async function ensureWorkBranch(
   repo: GitRepo,
@@ -68,6 +76,11 @@ export async function ensureWorkBranch(
 ): Promise<string> {
   const branch = workBranchName(ticketId);
   await assertCurrentBranchIsSafeToRunOn(repo);
+
+  if ((await repo.currentBranch()) === branch) {
+    return branch;
+  }
+
   if (await repo.hasUncommittedChanges(ignorePathPrefixes)) {
     throw new UncommittedChangesError();
   }

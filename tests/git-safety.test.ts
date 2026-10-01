@@ -104,4 +104,21 @@ describe('ensureWorkBranch uncommitted-changes guard', () => {
     const repo = new GitRepo(dir);
     await expect(ensureWorkBranch(repo, 'TW-0001', ['.trackwright'])).resolves.toBe('trackwright/tw-0001');
   });
+
+  /**
+   * Regression coverage for a real gap found during the DF-0007 dogfood run: `run` calls
+   * ensureWorkBranch at the start of every step, not just the first. Once a ticket is mid-run on
+   * its own dedicated branch, the working tree can legitimately carry real uncommitted project
+   * changes (in-progress work, or an implementer that forgot to commit) — switching to the branch
+   * you're already on is a no-op, so the clean-tree guard must not fire in that case, or a ticket
+   * could never be resumed past the point an implementer left something uncommitted.
+   */
+  it('allows resuming on the ticket\'s own branch even with real uncommitted project changes', async () => {
+    const repo = new GitRepo(dir);
+    await ensureWorkBranch(repo, 'TW-0001', ['.trackwright']); // first call: creates + checks out the branch
+    await writeFile(path.join(dir, 'unrelated-work.txt'), 'in-progress edit, not yet committed', 'utf8');
+
+    await expect(ensureWorkBranch(repo, 'TW-0001', ['.trackwright'])).resolves.toBe('trackwright/tw-0001');
+    expect(await repo.currentBranch()).toBe('trackwright/tw-0001');
+  });
 });
