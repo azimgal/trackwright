@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
 import { runInit } from './commands/init.js';
 import { runTicketCreate } from './commands/ticket-create.js';
@@ -8,12 +9,22 @@ import { runTicketWaive } from './commands/waive.js';
 import { runTicketRetry } from './commands/ticket-retry.js';
 import { runDesignApprove, runDesignList, runDesignShow } from './commands/design.js';
 
+// Read the real version from package.json rather than a second, hand-maintained literal —
+// found during the release-readiness audit: `--version` previously reported a hardcoded string
+// that had already drifted from package.json's actual version on the very next bump. The
+// relative path (two levels up from this file) resolves the same way whether this runs as
+// compiled dist/cli/index.js or, via tsx, directly from src/cli/index.ts — both sit at
+// <package root>/<src|dist>/cli/index.{ts,js}.
+const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
+
 const program = new Command();
 
 program
   .name('trackwright')
   .description('A Claude-first orchestration wrapper for ticket-driven development.')
-  .version('0.1.0');
+  .version(packageJson.version);
 
 program
   .command('init')

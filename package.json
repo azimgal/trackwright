@@ -1,6 +1,6 @@
 {
   "name": "trackwright",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A Claude-first orchestration wrapper that moves tickets through a declarative development lifecycle (Planning -> ... -> Awaiting Merge -> Done), with independent verification and machine-enforced gates.",
   "type": "module",
   "license": "Apache-2.0",
