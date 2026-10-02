@@ -511,3 +511,48 @@ describe('WorkflowEngine post-implementer commit check', () => {
     expect(result.steps[0]!.toStage).toBe('code-review');
   });
 });
+
+/**
+ * Crash-window regression coverage from the release-readiness audit. finish() used to record
+ * evidence BEFORE saving the ticket's new stage. A crash in the gap between those two writes
+ * left an evidence record on disk claiming a stage transition happened, while the ticket itself
+ * never actually advanced — a restart would recompute the same `attempt` number from that
+ * evidence, call step() again, and invoke a real agent a second time for a transition evidence
+ * already says occurred (wasted cost; potentially double-counted retry-ceiling attempts). The
+ * ticket save (and its commit) now happen BEFORE evidence is recorded, so that specific window
+ * can no longer duplicate agent work — the only possible loss is one evidence record for a
+ * transition that did, correctly, happen.
+ */
+describe('WorkflowEngine crash-window ordering', () => {
+  it('persists the ticket\'s new stage even if evidence recording fails right after', async () => {
+    await createReadyTicket('TW-0046');
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+
+    const config = { ...(await initConfig(projectRoot, 'TW')), checks: { fast: [], test: [], premerge: [] } };
+    // Object.create(evidenceStore): a new object whose prototype IS the real instance, so every
+    // method (newRunId, attemptCount, ...) still works via the prototype chain except the one
+    // explicitly shadowed below.
+    const explodingEvidenceStore = Object.create(evidenceStore) as EvidenceStore;
+    (explodingEvidenceStore as { record: EvidenceStore['record'] }).record = () => {
+      throw new Error('simulated crash: disk full while writing evidence');
+    };
+
+    const engine = new WorkflowEngine({
+      ticketStore,
+      evidenceStore: explodingEvidenceStore,
+      claudeRunner: runner,
+      config,
+      gitRepo: new GitRepo(projectRoot),
+      cwd: projectRoot,
+    });
+
+    await expect(engine.step('TW-0046')).rejects.toThrow('simulated crash');
+
+    // Despite the "crash," the ticket itself must already show the real outcome of this step —
+    // not the pre-step stage, which is what the old (evidence-first) ordering would have left it
+    // at, setting up a duplicate invocation on the next `run`.
+    const ticket = await ticketStore.getOrThrow('TW-0046');
+    expect(ticket.frontmatter.stage).toBe('architecture');
+  });
+});

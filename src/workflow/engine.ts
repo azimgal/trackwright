@@ -167,6 +167,35 @@ export class WorkflowEngine {
     }
 
     const gitSha = await this.safeSha();
+    const toStage = this.resolveNextStage(stage, result.outcome);
+
+    let sections = ticket.sections;
+    for (const [section, content] of Object.entries(this.sectionUpdatesFor(stage, result))) {
+      sections = { ...sections, [section]: content };
+    }
+
+    const updated: Ticket = {
+      ...ticket,
+      sections,
+      frontmatter: {
+        ...ticket.frontmatter,
+        stage: toStage,
+        status: result.outcome === 'CANCELLED' ? 'cancelled' : ticket.frontmatter.status,
+      },
+    };
+    // Ticket state is saved (and committed) BEFORE evidence is recorded — found during the
+    // release-readiness audit's crash-window analysis. The previous order (evidence first, then
+    // ticket save) meant a crash in the gap between them left a SUCCESS (or any outcome) evidence
+    // record on disk for an attempt the ticket itself never actually advanced past — so a restart
+    // would recompute the same `attempt` number from evidence, call step() again, and re-invoke a
+    // real agent for a stage transition evidence already claims happened: wasted cost at best,
+    // double-counted retry-ceiling attempts at worst. This order's own crash window is strictly
+    // safer: if evidence recording fails or the process dies right after, the ticket has already
+    // (and correctly) advanced — the only loss is one evidence record for a transition that did
+    // happen, a pure audit-trail gap, never a duplicate invocation.
+    const saved = await this.deps.ticketStore.save(updated);
+    await this.commitTicketState(saved, stage, toStage, result.outcome);
+
     await this.deps.evidenceStore.record({
       runId,
       ticketId: ticket.frontmatter.id,
@@ -184,25 +213,6 @@ export class WorkflowEngine {
       summary: result.summary,
       costUsd: result.costUsd,
     });
-
-    const toStage = this.resolveNextStage(stage, result.outcome);
-
-    let sections = ticket.sections;
-    for (const [section, content] of Object.entries(this.sectionUpdatesFor(stage, result))) {
-      sections = { ...sections, [section]: content };
-    }
-
-    const updated: Ticket = {
-      ...ticket,
-      sections,
-      frontmatter: {
-        ...ticket.frontmatter,
-        stage: toStage,
-        status: result.outcome === 'CANCELLED' ? 'cancelled' : ticket.frontmatter.status,
-      },
-    };
-    const saved = await this.deps.ticketStore.save(updated);
-    await this.commitTicketState(saved, stage, toStage, result.outcome);
 
     return {
       ticketId: ticket.frontmatter.id,
