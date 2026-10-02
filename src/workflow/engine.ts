@@ -6,7 +6,7 @@ import {
   implementerAgentsFor,
   requiresDesignGate,
 } from '../policies/routing.js';
-import { findClarificationMarkers, isPlanningComplete, type Ticket } from '../tickets/schema.js';
+import { findClarificationMarkers, isPlanningComplete, DESIGN_STATUSES, type DesignStatus, type Ticket } from '../tickets/schema.js';
 import type { TicketStore } from '../tickets/store.js';
 import type { ClaudeRunner, AgentInvocation, AgentResult } from '../claude/types.js';
 import type { EvidenceStore } from '../evidence/store.js';
@@ -181,6 +181,7 @@ export class WorkflowEngine {
         ...ticket.frontmatter,
         stage: toStage,
         status: result.outcome === 'CANCELLED' ? 'cancelled' : ticket.frontmatter.status,
+        design_status: this.designStatusFor(result) ?? ticket.frontmatter.design_status,
       },
     };
     // Ticket state is saved (and committed) BEFORE evidence is recorded — found during the
@@ -233,6 +234,23 @@ export class WorkflowEngine {
    * ticket is the source of truth." Only outcome SUCCESS writes sections; a failed run's
    * half-formed `data` is not persisted into the ticket body.
    */
+  /**
+   * executeDesignGate (and executeVerification, for DESIGN_FAIL) report their actual
+   * design_status decision via `result.data.design_status` — this is the one place that writes
+   * it onto the ticket, regardless of which stage produced it, mirroring how sectionUpdatesFor
+   * handles ticket *sections*. Before this, the engine only ever wrote design_status via the
+   * human-invoked `trackwright design approve` (-> 'synced'); the deterministic gate's own
+   * 'required'/'pending'/'stale' decisions were computed every call but never persisted, so
+   * `ticket show` could claim `design_status=not-required` on a ticket that was, in fact, sitting
+   * BLOCKED on an unapproved design draft.
+   */
+  private designStatusFor(result: AgentResult): DesignStatus | null {
+    const value = (result.data as Record<string, unknown>)?.design_status;
+    return typeof value === 'string' && (DESIGN_STATUSES as readonly string[]).includes(value)
+      ? (value as DesignStatus)
+      : null;
+  }
+
   private sectionUpdatesFor(stage: Stage, result: AgentResult): Record<string, string> {
     // Planning's draft is worth keeping even when downgraded to NEEDS_CLARIFICATION by
     // executePlanning above — a human resolving the markers needs to see what was actually
@@ -459,7 +477,12 @@ export class WorkflowEngine {
     }
 
     if (decision === 'not-required') {
-      return { outcome: 'SUCCESS', summary: 'design not required for this ticket', data: {}, durationMs: 0 };
+      return {
+        outcome: 'SUCCESS',
+        summary: 'design not required for this ticket',
+        data: { design_status: 'not-required' },
+        durationMs: 0,
+      };
     }
 
     const existing = await this.designProvider.getLatestForTicket(ticket.frontmatter.id);
@@ -469,13 +492,18 @@ export class WorkflowEngine {
     if (existing?.status === 'approved') {
       const stale = isDesignStale({ artifact: existing, currentRequirementsHash, currentGitSha: currentSha });
       if (!stale) {
-        return { outcome: 'SUCCESS', summary: `design ${existing.designId} approved and fresh`, data: {}, durationMs: 0 };
+        return {
+          outcome: 'SUCCESS',
+          summary: `design ${existing.designId} approved and fresh`,
+          data: { design_status: 'synced' },
+          durationMs: 0,
+        };
       }
       await this.designProvider.markStale(existing.designId);
       return {
         outcome: 'BLOCKED',
         summary: `design ${existing.designId} is stale (requirements or code changed since approval) — needs re-sync`,
-        data: {},
+        data: { design_status: 'stale' },
         durationMs: 0,
       };
     }
@@ -490,7 +518,7 @@ export class WorkflowEngine {
       return {
         outcome: 'BLOCKED',
         summary: `design required — drafted ${created.designId} at ${created.artifactPath}, awaiting human approval via \`trackwright design approve ${created.designId}\``,
-        data: {},
+        data: { design_status: 'pending' },
         durationMs: 0,
       };
     }
@@ -499,7 +527,7 @@ export class WorkflowEngine {
     return {
       outcome: 'BLOCKED',
       summary: `design ${existing.designId} drafted, awaiting human approval via \`trackwright design approve ${existing.designId}\``,
-      data: {},
+      data: { design_status: 'pending' },
       durationMs: 0,
     };
   }
@@ -730,7 +758,12 @@ export class WorkflowEngine {
     await this.designProvider.recordVisualCheck(artifact.designId, check);
 
     if (check.outcome === 'DESIGN_FAIL') {
-      return { ...result, outcome: 'VERIFICATION_FAILED', summary: `visual check failed: ${check.summary}` };
+      return {
+        ...result,
+        outcome: 'VERIFICATION_FAILED',
+        summary: `visual check failed: ${check.summary}`,
+        data: { ...result.data, design_status: 'failed' },
+      };
     }
     if (check.outcome === 'DESIGN_CONCERNS') {
       return { ...result, outcome: 'CONCERNS', summary: `visual check has concerns: ${check.summary}` };

@@ -13,6 +13,13 @@ export function deterministicDesignGate(ticket: Ticket): DesignGateDecision {
   // gate run pin the answer, and what makes requiresDesignGate (policies/routing.ts) and this
   // function agree with each other rather than each guessing independently.
   if (ticket.frontmatter.design_status === 'required') return 'required';
+  // 'pending' (a draft artifact exists, awaiting human approval) and 'failed' (the
+  // post-implementation visual check came back DESIGN_FAIL) both mean a design gate already
+  // decided this ticket needs one — re-deriving from discipline heuristics here would let an
+  // already-pending/failed design silently reclassify as not-required partway through its own
+  // lifecycle, purely because of which discipline happens to be set.
+  if (ticket.frontmatter.design_status === 'pending') return 'required';
+  if (ticket.frontmatter.design_status === 'failed') return 'required';
   if (ticket.frontmatter.design_status === 'synced') return 'not-required'; // already satisfied
   if (ticket.frontmatter.design_status === 'stale') return 'required'; // needs re-sync
 

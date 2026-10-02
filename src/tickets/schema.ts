@@ -37,6 +37,9 @@ export const ticketIdSchema = z
   .string()
   .regex(TICKET_ID_PATTERN, 'Ticket id must look like TW-0001 (prefix-number)');
 
+export const DESIGN_STATUSES = ['not-required', 'required', 'pending', 'synced', 'stale', 'failed'] as const;
+export type DesignStatus = (typeof DESIGN_STATUSES)[number];
+
 export const ticketFrontmatterSchema = z
   .object({
     id: ticketIdSchema,
@@ -51,9 +54,12 @@ export const ticketFrontmatterSchema = z
     specialization: z.union([z.enum(SPECIALIZATIONS), z.null()]).default(null),
     secondary_disciplines: z.array(z.enum(DISCIPLINES)).default([]),
     dependencies: z.array(ticketIdSchema).default([]),
-    design_status: z
-      .enum(['not-required', 'required', 'synced', 'stale'])
-      .default('not-required'),
+    // 'pending': a design artifact has been drafted and is awaiting human approval (set by
+    // engine.ts's executeDesignGate the moment it drafts one — distinct from 'required', which
+    // just means "a design is needed" with no artifact yet). 'failed': the post-implementation
+    // visual check came back DESIGN_FAIL — distinct from 'stale', which means "code/requirements
+    // moved since approval," not "the implementation doesn't match what was approved."
+    design_status: z.enum(DESIGN_STATUSES).default('not-required'),
   })
   .strict();
 

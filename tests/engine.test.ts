@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { TicketStore } from '../src/tickets/store.js';
 import { EvidenceStore } from '../src/evidence/store.js';
 import { GitRepo } from '../src/git/repo.js';
+import { LocalDesignArtifactProvider } from '../src/design/local-provider.js';
 import { MockClaudeRunner } from '../src/claude/mock-runner.js';
 import { WorkflowEngine } from '../src/workflow/engine.js';
 import { newTicket } from '../src/tickets/template.js';
@@ -554,5 +555,90 @@ describe('WorkflowEngine crash-window ordering', () => {
     // at, setting up a duplicate invocation on the next `run`.
     const ticket = await ticketStore.getOrThrow('TW-0046');
     expect(ticket.frontmatter.stage).toBe('architecture');
+  });
+});
+
+/**
+ * Found during the final release-hardening pass: executeDesignGate's deterministic decision
+ * (required/pending/stale/not-required) was computed on every call but never written back onto
+ * the ticket's own `design_status` field — only the human-invoked `trackwright design approve`
+ * ever touched it (-> 'synced'). `ticket show` could claim `design_status=not-required` on a
+ * ticket that was, in fact, BLOCKED waiting on an unapproved design draft. engine.ts now writes
+ * design_status via `result.data.design_status`, a stage-agnostic mechanism (like
+ * sectionUpdatesFor, but for frontmatter) that applies regardless of outcome — unlike sections,
+ * which only persist on SUCCESS, a BLOCKED gate's 'pending'/'stale' decision must still land.
+ */
+describe('design_status write-back', () => {
+  async function createTicket(id: string, overrides: Partial<Parameters<typeof newTicket>[0]> = {}) {
+    const ticket = newTicket({ id, title: 'Design thing', discipline: 'design', context: 'needs a design', ...overrides });
+    await ticketStore.save({ ...ticket, frontmatter: { ...ticket.frontmatter, stage: 'design' } });
+  }
+
+  it('sets design_status to "pending" when a fresh draft is created', async () => {
+    await createTicket('TW-0050');
+    const engine = await makeEngine(new MockClaudeRunner());
+
+    const step = await engine.step('TW-0050');
+    expect(step.outcome).toBe('BLOCKED');
+
+    const ticket = await ticketStore.getOrThrow('TW-0050');
+    expect(ticket.frontmatter.design_status).toBe('pending');
+  });
+
+  it('stays "pending" on a second gate check against the same unapproved draft', async () => {
+    await createTicket('TW-0051');
+    const engine = await makeEngine(new MockClaudeRunner());
+
+    await engine.step('TW-0051'); // drafts, BLOCKED, design_status -> pending
+    const second = await engine.step('TW-0051'); // same draft, still unapproved
+
+    expect(second.outcome).toBe('BLOCKED');
+    const ticket = await ticketStore.getOrThrow('TW-0051');
+    expect(ticket.frontmatter.design_status).toBe('pending');
+  });
+
+  it('sets design_status to "not-required" for a ticket the gate decides does not need one', async () => {
+    await createTicket('TW-0052', { discipline: 'infrastructure' });
+    const engine = await makeEngine(new MockClaudeRunner());
+
+    const step = await engine.step('TW-0052');
+    expect(step.outcome).toBe('SUCCESS');
+
+    const ticket = await ticketStore.getOrThrow('TW-0052');
+    expect(ticket.frontmatter.design_status).toBe('not-required');
+  });
+
+  it('sets design_status to "synced" once an approved, fresh design is found', async () => {
+    await createTicket('TW-0053');
+    const engine = await makeEngine(new MockClaudeRunner());
+    await engine.step('TW-0053'); // drafts a design, BLOCKED
+
+    const design = await (async () => {
+      const provider = new LocalDesignArtifactProvider(path.join(projectRoot, '.trackwright', 'design'));
+      const latest = await provider.getLatestForTicket('TW-0053');
+      return provider.approve(latest!.designId);
+    })();
+    expect(design.status).toBe('approved');
+
+    const second = await engine.step('TW-0053');
+    expect(second.outcome).toBe('SUCCESS');
+    const ticket = await ticketStore.getOrThrow('TW-0053');
+    expect(ticket.frontmatter.design_status).toBe('synced');
+  });
+
+  it('sets design_status to "stale" when an approved design goes stale', async () => {
+    await createTicket('TW-0054');
+    const engine = await makeEngine(new MockClaudeRunner());
+    await engine.step('TW-0054');
+
+    const provider = new LocalDesignArtifactProvider(path.join(projectRoot, '.trackwright', 'design'));
+    const latest = await provider.getLatestForTicket('TW-0054');
+    await provider.approve(latest!.designId);
+    await provider.setReferenceSha(latest!.designId, 'some-old-sha-that-will-not-match');
+
+    const second = await engine.step('TW-0054');
+    expect(second.outcome).toBe('BLOCKED');
+    const ticket = await ticketStore.getOrThrow('TW-0054');
+    expect(ticket.frontmatter.design_status).toBe('stale');
   });
 });
