@@ -1,6 +1,23 @@
 import type { Ticket } from '../tickets/schema.js';
 import type { RunOutcome } from '../workflow/outcomes.js';
 
+/**
+ * Claude Code offers both Bash and PowerShell as shell tools on Windows — a scoped allowedTools
+ * pattern like `Bash(git add*)` does NOT also cover `PowerShell(git add*)`; they are matched
+ * independently. Found via real dogfooding (DF-0008, then reproduced deterministically on
+ * DF-0009): once the model tries one git/test command via Bash and it's denied (e.g. because it
+ * compounded it with `cd ...` or an out-of-scope command), it tends to retry the *same* command
+ * via PowerShell instead — which was never allow-listed at all, since every agent here only ever
+ * listed Bash patterns. The result was a 100%-reproducible dead end (confirmed via a standalone
+ * `claude -p` repro: identical git commands denied every time through PowerShell, zero denials
+ * once PowerShell(...) patterns were added) that cost 2-3 wasted real Claude Opus invocations per
+ * occurrence and, in both real runs, exhausted enough of the stage's retry ceiling to reach
+ * awaiting-human on a ticket that had, in fact, already been correctly implemented.
+ */
+function bashAndPowerShell(patterns: readonly string[]): string[] {
+  return patterns.flatMap((p) => [`Bash(${p})`, `PowerShell(${p})`]);
+}
+
 export interface AgentPromptContext {
   ticket: Ticket;
   cwd: string;
@@ -96,7 +113,7 @@ const PLANNER: AgentDefinition = {
   role: 'Turns a ticket\'s Context into concrete Requirements, Acceptance Criteria, a Definition of Done, a Plan, and Tasks.',
   model: 'sonnet',
   allowedTools: ['Read', 'Grep', 'Glob'],
-  disallowedTools: ['Write', 'Edit', 'Bash'],
+  disallowedTools: ['Write', 'Edit', 'Bash', 'PowerShell'],
   forbiddenActions: ['Writing or editing any file', 'Running shell commands', 'Deciding architecture on its own for anything touching a protected path'],
   canWriteCode: false,
   canChangeTicketState: false,
@@ -145,8 +162,8 @@ function implementer(name: string, specializationHint: string, model: string): A
     // need is committing its own work (see the system prompt below), so that's all it gets;
     // running the project's own tests/build is deliberately not in scope here — the dedicated
     // Testing stage runs those deterministically via Trackwright's own process spawn regardless.
-    allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', 'Bash(git add*)', 'Bash(git commit*)'],
-    disallowedTools: ['Bash(git push*)', 'Bash(git reset --hard*)', 'Bash(git clean*)'],
+    allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit', ...bashAndPowerShell(['git add*', 'git commit*'])],
+    disallowedTools: bashAndPowerShell(['git push*', 'git reset --hard*', 'git clean*']),
     forbiddenActions: [
       'Pushing to any remote branch',
       'Force-pushing or discarding history',
@@ -204,8 +221,8 @@ const CODE_REVIEWER: AgentDefinition = {
   name: 'code-reviewer',
   role: 'Reviews the diff for quality, architecture fit, security, and regressions — never runs tests.',
   model: 'opus',
-  allowedTools: ['Read', 'Grep', 'Glob', 'Bash(git diff*)', 'Bash(git log*)'],
-  disallowedTools: ['Write', 'Edit', 'Bash(git commit*)', 'Bash(git push*)'],
+  allowedTools: ['Read', 'Grep', 'Glob', ...bashAndPowerShell(['git diff*', 'git log*'])],
+  disallowedTools: ['Write', 'Edit', ...bashAndPowerShell(['git commit*', 'git push*'])],
   forbiddenActions: ['Editing any file', 'Committing', 'Deciding test correctness (that is Testing\'s job)'],
   canWriteCode: false,
   canChangeTicketState: false,
@@ -239,8 +256,8 @@ const VERIFICATION_AGENT: AgentDefinition = {
   name: 'verification-agent',
   role: 'Independently judges whether the final diff satisfies this ticket\'s Acceptance Criteria and Definition of Done.',
   model: 'opus',
-  allowedTools: ['Read', 'Grep', 'Glob', 'Bash(git diff*)'],
-  disallowedTools: ['Write', 'Edit', 'Bash(git commit*)', 'Bash(git push*)'],
+  allowedTools: ['Read', 'Grep', 'Glob', ...bashAndPowerShell(['git diff*'])],
+  disallowedTools: ['Write', 'Edit', ...bashAndPowerShell(['git commit*', 'git push*'])],
   forbiddenActions: [
     'Editing any file',
     'Reading the ticket\'s Plan, Tasks, or implementer notes',
@@ -302,7 +319,7 @@ const DESIGN_GATE_AGENT: AgentDefinition = {
   role: 'Only called when deterministic rules (design/gate.ts) cannot decide — judges whether a ticket is design-sensitive.',
   model: 'haiku',
   allowedTools: ['Read', 'Grep', 'Glob'],
-  disallowedTools: ['Write', 'Edit', 'Bash'],
+  disallowedTools: ['Write', 'Edit', 'Bash', 'PowerShell'],
   forbiddenActions: ['Editing any file', 'Deciding this for a ticket the deterministic rules already resolved'],
   canWriteCode: false,
   canChangeTicketState: false,

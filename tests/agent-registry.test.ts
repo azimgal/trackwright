@@ -57,3 +57,41 @@ describe('Bash-using agents all warn against a leading "cd"', () => {
     expect(agent.disallowedTools).toContain('Bash');
   });
 });
+
+/**
+ * Regression coverage for a real, 100%-reproducible gap found on DF-0008 and again on DF-0009:
+ * Claude Code offers Bash AND PowerShell as independent shell tools on Windows, and a scoped
+ * allowedTools pattern like `Bash(git add*)` does not also cover `PowerShell(git add*)` — they
+ * are matched separately. The model, having had an earlier Bash attempt denied (e.g. for a `cd
+ * ...` prefix or an out-of-scope compound command), reliably retried the *same* git command via
+ * PowerShell next — which no agent here had ever allow-listed, since every one only ever listed
+ * Bash patterns. Confirmed via a standalone `claude -p` repro against this exact ticket's working
+ * tree: identical `PowerShell(git add ...)`/`PowerShell(git commit ...)` calls were denied every
+ * time with only the Bash patterns present, and succeeded with zero denials once the matching
+ * PowerShell(...) patterns were added — exactly the fix below.
+ */
+describe('every Bash-scoped git permission has a matching PowerShell one', () => {
+  function bashPatterns(tools: readonly string[]): string[] {
+    return tools.filter((t) => t.startsWith('Bash(')).map((t) => t.slice('Bash('.length));
+  }
+  function powerShellPatterns(tools: readonly string[]): string[] {
+    return tools.filter((t) => t.startsWith('PowerShell(')).map((t) => t.slice('PowerShell('.length));
+  }
+
+  it.each(['implementer.backend', 'code-reviewer', 'verification-agent'])(
+    '%s: every allowed Bash(...) git pattern has a PowerShell(...) twin',
+    (agentName) => {
+      const agent = getAgent(agentName);
+      expect(powerShellPatterns(agent.allowedTools).sort()).toEqual(bashPatterns(agent.allowedTools).sort());
+      expect(powerShellPatterns(agent.disallowedTools).sort()).toEqual(bashPatterns(agent.disallowedTools).sort());
+    },
+  );
+
+  it('implementer can actually stage and commit (the exact real-world failure)', () => {
+    const agent = getAgent('implementer.backend');
+    expect(agent.allowedTools).toContain('Bash(git add*)');
+    expect(agent.allowedTools).toContain('PowerShell(git add*)');
+    expect(agent.allowedTools).toContain('Bash(git commit*)');
+    expect(agent.allowedTools).toContain('PowerShell(git commit*)');
+  });
+});
