@@ -15,5 +15,8 @@ export function defaultConfig(ticketPrefix: string): ProjectConfig {
       binary: 'claude',
       defaultTimeoutMs: 600_000,
     },
+    maxParallel: 1,
+    autoMerge: false,
+    targetBranch: null,
   };
 }

@@ -8,6 +8,7 @@ import { runTicketRun } from './commands/run.js';
 import { runTicketWaive } from './commands/waive.js';
 import { runTicketRetry } from './commands/ticket-retry.js';
 import { runDesignApprove, runDesignList, runDesignShow } from './commands/design.js';
+import { runTicketBatch, DependencyCycleError } from './commands/batch.js';
 
 // Read the real version from package.json rather than a second, hand-maintained literal —
 // found during the release-readiness audit: `--version` previously reported a hardcoded string
@@ -133,6 +134,49 @@ program
       console.log(`\nStopped: ${result.stopReason}. Ticket ${result.ticket.frontmatter.id} is now at stage "${result.ticket.frontmatter.stage}".`);
     } catch (err) {
       fail(err);
+    }
+  });
+
+program
+  .command('batch <ticketIds...>')
+  .description(
+    'Run several tickets in one invocation, respecting dependencies between them (topological waves). ' +
+      'Tickets in the same wave with declared, non-overlapping --scope run concurrently in isolated git ' +
+      'worktrees, up to config.maxParallel; everything else runs serially. See docs/architecture.md.',
+  )
+  .option('--dry-run', 'use a mock Claude runner instead of invoking the real CLI')
+  .option('--max-steps <n>', 'maximum stage transitions per ticket before stopping', (v) => parseInt(v, 10), 20)
+  .option('--max-parallel <n>', 'override config.maxParallel for this run', (v) => parseInt(v, 10))
+  .option('-C, --cwd <dir>', 'project root', process.cwd())
+  .action(async (ticketIds, opts) => {
+    try {
+      const result = await runTicketBatch(opts.cwd, ticketIds, {
+        dryRun: opts.dryRun,
+        maxSteps: opts.maxSteps,
+        maxParallel: opts.maxParallel,
+        onWaveStart: (waveIndex, ids) => {
+          console.log(`\n=== wave ${waveIndex}: ${ids.join(', ')} ===`);
+        },
+        onTicketDone: (r) => {
+          const mode = r.ranConcurrently ? 'worktree' : 'serial';
+          const outcome = r.outcome === 'completed' ? r.result?.stopReason ?? 'completed' : `error: ${r.error}`;
+          console.log(`  ${r.ticketId} [${mode}] -> ${outcome}`);
+        },
+      });
+      if (result.conflicts.length > 0) {
+        console.log('\nCONFLICTS DETECTED (not merged, not resolved — review before merging either branch):');
+        for (const c of result.conflicts) {
+          console.log(`  ${c.ticketIds.join(' & ')} both touch: ${c.files.join(', ')}`);
+        }
+      }
+      console.log(`\nWaves: ${result.waves.map((w) => `[${w.join(', ')}]`).join(' -> ')}`);
+    } catch (err) {
+      if (err instanceof DependencyCycleError) {
+        console.error(`Error: ${err.message}`);
+        process.exitCode = 1;
+      } else {
+        fail(err);
+      }
     }
   });
 

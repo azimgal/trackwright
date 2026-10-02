@@ -74,6 +74,32 @@ export class GitRepo {
     await this.git(['checkout', name]);
   }
 
+  /**
+   * Adds a git worktree — a second, fully isolated working directory sharing this repo's object
+   * store, with its own checked-out branch. Used by workflow/batch.ts for genuine, safe
+   * concurrent execution: two tickets running at once must never share one working tree (git
+   * itself refuses to have the same branch checked out twice, and even if it didn't, two agents
+   * writing to the same files would be exactly the "blind global lock" the batch scheduler is
+   * designed to avoid). `baseBranch` is only used when `branch` doesn't exist yet (creates it off
+   * that base); if `branch` already exists, this just worktree-checks it out — which itself
+   * throws if that branch is already checked out somewhere else (another worktree, or this main
+   * repo) — a signal callers should treat as "fall back to running this one serially instead."
+   */
+  async addWorktree(worktreePath: string, branch: string, baseBranch?: string): Promise<void> {
+    const exists = await this.branchExists(branch);
+    if (exists) {
+      await this.git(['worktree', 'add', worktreePath, branch]);
+    } else {
+      await this.git(['worktree', 'add', '-b', branch, worktreePath, ...(baseBranch ? [baseBranch] : [])]);
+    }
+  }
+
+  /** Removes a worktree added via addWorktree. Never `--force`: a worktree with real uncommitted
+   * changes should fail loudly here, not be silently discarded. */
+  async removeWorktree(worktreePath: string): Promise<void> {
+    await this.git(['worktree', 'remove', worktreePath]);
+  }
+
   async addAll(): Promise<void> {
     await this.git(['add', '-A']);
   }
@@ -106,6 +132,34 @@ export class GitRepo {
     } catch {
       return false;
     }
+  }
+
+  /** Names of files changed on `branch` relative to the first existing candidate base branch
+   * (default main/master) — used by workflow/batch.ts to compare two tickets' *actual* changes
+   * regardless of which one happens to be currently checked out. Empty array (never throws) if
+   * neither candidate exists or the diff otherwise fails, so a missing base branch degrades to
+   * "nothing known to compare," not a crash. */
+  async changedFilesOn(
+    branch: string,
+    candidates: readonly string[] = ['main', 'master'],
+    excludePathPrefixes: readonly string[] = [],
+  ): Promise<string[]> {
+    const pathspecs = excludePathPrefixes.map((p) => `:(exclude)${p}`);
+    const pathArgs = pathspecs.length > 0 ? ['--', '.', ...pathspecs] : [];
+    for (const base of candidates) {
+      if (await this.branchExists(base)) {
+        try {
+          const out = await this.git(['diff', '--name-only', `${base}...${branch}`, ...pathArgs]);
+          return out
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean);
+        } catch {
+          continue;
+        }
+      }
+    }
+    return [];
   }
 
   /**
