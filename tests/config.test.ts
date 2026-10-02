@@ -62,10 +62,13 @@ describe('runInit (CLI command)', () => {
    * `init` never touched the target project's own `.gitignore` — risking evidence (cost data, raw
    * agent response excerpts) being swept into a commit by a future `git add -A`.
    */
-  it('appends .trackwright/evidence/ to a project with no .gitignore yet', async () => {
+  it('appends .trackwright/evidence/ and .trackwright/.worktrees/ to a project with no .gitignore yet', async () => {
     await runInit(dir, { prefix: 'TW' });
     const gitignore = await readFile(path.join(dir, '.gitignore'), 'utf8');
     expect(gitignore).toContain('.trackwright/evidence/');
+    // .worktrees/: workflow/batch.ts's temporary git worktrees, always removed on success but
+    // could be left behind by a crash mid-batch — equally not meant to ever be committed.
+    expect(gitignore).toContain('.trackwright/.worktrees/');
   });
 
   it('appends to an existing .gitignore without disturbing its content', async () => {

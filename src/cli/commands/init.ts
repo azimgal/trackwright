@@ -11,7 +11,7 @@ export interface InitOptions {
 export async function runInit(projectRoot: string, options: InitOptions): Promise<string> {
   const alreadyInitialized = isInitialized(projectRoot);
   const config = await initConfig(projectRoot, options.prefix);
-  const gitignoreChanged = await ensureEvidenceGitignored(projectRoot);
+  const gitignoreChanged = await ensureGitignoreEntries(projectRoot);
   const pathsToCommit = ['.trackwright/config.yaml', ...(gitignoreChanged ? ['.gitignore'] : [])];
   if (!alreadyInitialized || gitignoreChanged) {
     await commitBookkeeping(projectRoot, pathsToCommit, 'chore(trackwright): initialize config');
@@ -26,20 +26,28 @@ export async function runInit(projectRoot: string, options: InitOptions): Promis
  * project's own `.gitignore`, so `.trackwright/evidence/*.jsonl` showed up as untracked noise in
  * `git status` forever on a brand-new project — and risked being swept into a commit by a future
  * `git add -A`, the exact thing evidence (cost data, raw agent response excerpts) should never be.
- * This repo's own `.gitignore` already excludes its own `/.trackwright/evidence/`; new projects
- * should get the same exclusion automatically, not only if a human remembers to add it by hand.
- * Idempotent (checks for an exact existing line before appending) and best-effort — a write
- * failure here never blocks `init` itself.
+ * `.trackwright/.worktrees/` (workflow/batch.ts's temporary git worktrees — always removed on
+ * success, but a crash mid-batch could leave one behind) belongs in the same category: transient
+ * Trackwright-internal state, never meant to be committed. This repo's own `.gitignore` already
+ * excludes both of its own equivalents by hand; new projects should get the same exclusions
+ * automatically. Idempotent (checks for an exact existing line before appending each) and
+ * best-effort — a write failure here never blocks `init` itself.
  */
-async function ensureEvidenceGitignored(projectRoot: string): Promise<boolean> {
-  const entry = '.trackwright/evidence/';
+async function ensureGitignoreEntries(projectRoot: string): Promise<boolean> {
+  const entries = ['.trackwright/evidence/', '.trackwright/.worktrees/'];
   const gitignorePath = path.join(projectRoot, '.gitignore');
   try {
-    const existing = existsSync(gitignorePath) ? await readFile(gitignorePath, 'utf8') : '';
-    if (existing.split(/\r?\n/).some((line) => line.trim() === entry)) return false;
-    const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
-    await writeFile(gitignorePath, `${existing}${separator}${entry}\n`, 'utf8');
-    return true;
+    let content = existsSync(gitignorePath) ? await readFile(gitignorePath, 'utf8') : '';
+    const existingLines = new Set(content.split(/\r?\n/).map((l) => l.trim()));
+    let changed = false;
+    for (const entry of entries) {
+      if (existingLines.has(entry)) continue;
+      const separator = content.length === 0 || content.endsWith('\n') ? '' : '\n';
+      content = `${content}${separator}${entry}\n`;
+      changed = true;
+    }
+    if (changed) await writeFile(gitignorePath, content, 'utf8');
+    return changed;
   } catch {
     return false;
   }
