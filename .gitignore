@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 *.log
+*.tgz
 .DS_Store
 .env
 .env.local
@@ -15,4 +16,3 @@ scratchpad/
 # per-project runtime state created by `trackwright init`
 # (fixtures under tests/fixtures commit their own .trackwright/ on purpose)
 /.trackwright/evidence/
-/.trackwright/runs/

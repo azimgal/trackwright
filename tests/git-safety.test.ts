@@ -131,3 +131,20 @@ describe('ensureWorkBranch uncommitted-changes guard', () => {
     expect(await repo.currentBranch()).toBe('trackwright/tw-0001');
   });
 });
+
+/**
+ * Release-readiness audit: the "never push / never force-push / never destructive reset" git
+ * safety invariants are currently enforced structurally, not just by policy — GitRepo exposes no
+ * `push`, `reset`, or `clean` method at all, so no code path anywhere in the engine or CLI could
+ * call one even by mistake. This test exists so that if a future push/reset/clean implementation
+ * is ever added to GitRepo, it fails loudly here as a reminder to route it through
+ * assertPushIsSafe (or an equivalent guard) rather than letting it slip in unguarded.
+ */
+describe('GitRepo has no destructive or network-mutating capability at all', () => {
+  it('exposes no push, reset, or clean method', () => {
+    const repo = new GitRepo('.');
+    for (const method of ['push', 'reset', 'forcePush', 'clean', 'resetHard']) {
+      expect((repo as unknown as Record<string, unknown>)[method]).toBeUndefined();
+    }
+  });
+});
