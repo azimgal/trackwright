@@ -23,10 +23,23 @@ function assertDiscipline(value: string): Discipline {
   return value as Discipline;
 }
 
-function assertSpecialization(value: string | undefined): Specialization | null {
+/**
+ * `--specialization` is documented (CLI --help) as "development only." Found during the
+ * release-readiness audit: it was previously accepted for any discipline and silently ignored by
+ * the routing table's fallback (policies/routing.ts, `lookup`'s discipline-only fallback) for
+ * anything other than development — no crash, but a ticket file left with a specialization field
+ * that looks meaningful and never was, misleading anyone who reads it later. Now enforced instead
+ * of silently dropped.
+ */
+function assertSpecialization(value: string | undefined, discipline: Discipline): Specialization | null {
   if (!value) return null;
   if (!(SPECIALIZATIONS as readonly string[]).includes(value)) {
     throw new InvalidTicketCreateOptionsError(`--specialization must be one of ${SPECIALIZATIONS.join(', ')}, got "${value}"`);
+  }
+  if (discipline !== 'development') {
+    throw new InvalidTicketCreateOptionsError(
+      `--specialization only applies to --discipline development, got discipline "${discipline}"`,
+    );
   }
   return value as Specialization;
 }
@@ -44,12 +57,13 @@ export async function runTicketCreate(projectRoot: string, options: TicketCreate
   const store = new TicketStore(path.join(projectRoot, config.ticketsDir));
   const id = await store.nextId(config.ticketPrefix);
 
+  const discipline = assertDiscipline(options.discipline);
   const ticket = newTicket({
     id,
     title: options.title,
     context: options.context,
-    discipline: assertDiscipline(options.discipline),
-    specialization: assertSpecialization(options.specialization),
+    discipline,
+    specialization: assertSpecialization(options.specialization, discipline),
     flow: assertFlow(options.flow),
   });
 

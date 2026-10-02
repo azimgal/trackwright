@@ -4,7 +4,11 @@ export const PROTECTED_BRANCHES = ['main', 'master'] as const;
 
 export class ProtectedBranchError extends Error {
   constructor(branch: string, action: string) {
-    super(`refusing to ${action} on protected branch "${branch}" — Trackwright never does this automatically`);
+    // `action` carries its own trailing preposition (e.g. "run on", "push to") so the message
+    // reads correctly for every caller — a bare "refusing to run against on protected branch"
+    // (double preposition) was a real, user-facing wording bug found during the release-readiness
+    // audit, from `assertNotProtectedBranch(current, 'run against')` plus a hardcoded " on" here.
+    super(`refusing to ${action} protected branch "${branch}" — Trackwright never does this automatically`);
     this.name = 'ProtectedBranchError';
   }
 }
@@ -49,7 +53,7 @@ export function workBranchName(ticketId: string): string {
  */
 export async function assertCurrentBranchIsSafeToRunOn(repo: GitRepo): Promise<void> {
   const current = await repo.currentBranch();
-  assertNotProtectedBranch(current, 'run against');
+  assertNotProtectedBranch(current, 'run on');
 }
 
 /**
@@ -99,7 +103,7 @@ export async function ensureWorkBranch(
  * are enforced in exactly one place rather than re-implemented at every call site.
  */
 export function assertPushIsSafe(branch: string, force: boolean): void {
-  assertNotProtectedBranch(branch, 'push');
+  assertNotProtectedBranch(branch, 'push to');
   if (force) {
     throw new Error('refusing to force-push — Trackwright never force-pushes automatically');
   }

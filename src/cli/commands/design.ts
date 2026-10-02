@@ -2,6 +2,7 @@ import path from 'node:path';
 import { loadConfig } from '../../config/loader.js';
 import { TicketStore } from '../../tickets/store.js';
 import { LocalDesignArtifactProvider } from '../../design/local-provider.js';
+import { DesignNotFoundError } from '../../design/provider.js';
 import { GitRepo } from '../../git/repo.js';
 import { hashText } from '../../design/staleness.js';
 
@@ -52,10 +53,18 @@ export async function runDesignApprove(projectRoot: string, designId: string): P
   return `${designId}: approved for ${artifact.ticketId}. Ticket design_status set to "synced".`;
 }
 
+/**
+ * Throws (exit 1) when `designId` doesn't exist at all — found inconsistent during the
+ * release-readiness audit against `ticket show <id>`, which already exits 1 on an unknown id.
+ * `design list <ticketId>` deliberately stays soft (exit 0, "no design artifact for ticket X"):
+ * most tickets legitimately have no design yet, the same way an empty `ticket list` is not an
+ * error — but asking for one *specific* design id that was never created is a user-facing
+ * not-found, the same shape as `ticket show` on a typo'd id.
+ */
 export async function runDesignShow(projectRoot: string, designId: string): Promise<string> {
   const provider = await providerFor(projectRoot);
   const artifact = await provider.getDesign(designId);
-  if (!artifact) return `(no design artifact found with id "${designId}")`;
+  if (!artifact) throw new DesignNotFoundError(designId);
   return JSON.stringify(artifact, null, 2);
 }
 

@@ -29,6 +29,14 @@ describe('git safety', () => {
     expect(() => assertPushIsSafe('main', false)).toThrow(ProtectedBranchError);
   });
 
+  // Found during the release-readiness audit: `assertNotProtectedBranch(current, 'run against')`
+  // combined with a hardcoded " on" in ProtectedBranchError produced "refusing to run against on
+  // protected branch" — a double preposition. Every call site's `action` now carries its own
+  // trailing preposition instead.
+  it('produces grammatically correct messages for both the run and push refusals', () => {
+    expect(() => assertPushIsSafe('main', false)).toThrow('refusing to push to protected branch "main"');
+  });
+
   it('refuses a force push even on a non-protected branch', () => {
     expect(() => assertPushIsSafe('trackwright/tw-0001', true)).toThrow(/force-push/);
   });
@@ -65,6 +73,7 @@ describe('assertCurrentBranchIsSafeToRunOn', () => {
     await initRepoOnBranch('main');
     const repo = new GitRepo(dir);
     await expect(assertCurrentBranchIsSafeToRunOn(repo)).rejects.toThrow(ProtectedBranchError);
+    await expect(assertCurrentBranchIsSafeToRunOn(repo)).rejects.toThrow('refusing to run on protected branch "main"');
   });
 
   it('allows running on a non-protected branch', async () => {
