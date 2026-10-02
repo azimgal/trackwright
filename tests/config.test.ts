@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { initConfig, isInitialized, loadConfig, ConfigNotFoundError, configPath } from '../src/config/loader.js';
@@ -54,5 +54,33 @@ describe('runInit (CLI command)', () => {
     await runInit(dir, { prefix: 'TW' });
     const message = await runInit(dir, { prefix: 'TW' });
     expect(message).toContain('Already initialized');
+  });
+
+  /**
+   * Found during the release-readiness audit's clean-install test: a brand-new project had
+   * `.trackwright/evidence/*.jsonl` show up as untracked noise in `git status` forever, since
+   * `init` never touched the target project's own `.gitignore` — risking evidence (cost data, raw
+   * agent response excerpts) being swept into a commit by a future `git add -A`.
+   */
+  it('appends .trackwright/evidence/ to a project with no .gitignore yet', async () => {
+    await runInit(dir, { prefix: 'TW' });
+    const gitignore = await readFile(path.join(dir, '.gitignore'), 'utf8');
+    expect(gitignore).toContain('.trackwright/evidence/');
+  });
+
+  it('appends to an existing .gitignore without disturbing its content', async () => {
+    await writeFile(path.join(dir, '.gitignore'), 'node_modules/\n', 'utf8');
+    await runInit(dir, { prefix: 'TW' });
+    const gitignore = await readFile(path.join(dir, '.gitignore'), 'utf8');
+    expect(gitignore).toContain('node_modules/');
+    expect(gitignore).toContain('.trackwright/evidence/');
+  });
+
+  it('is idempotent — does not duplicate the entry on repeated init', async () => {
+    await runInit(dir, { prefix: 'TW' });
+    await runInit(dir, { prefix: 'TW' });
+    const gitignore = await readFile(path.join(dir, '.gitignore'), 'utf8');
+    const occurrences = gitignore.split('\n').filter((line) => line.trim() === '.trackwright/evidence/').length;
+    expect(occurrences).toBe(1);
   });
 });
