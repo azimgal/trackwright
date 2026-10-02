@@ -22,6 +22,7 @@ import { LocalDesignArtifactProvider } from '../design/local-provider.js';
 import type { DesignProvider } from '../design/provider.js';
 import { hashText, isDesignStale } from '../design/staleness.js';
 import { LocalPlaceholderVisualVerifier, type VisualVerifier } from '../design/visual-verify.js';
+import { dependencyReadiness } from '../dependencies/readiness.js';
 
 export interface StepResult {
   ticketId: string;
@@ -415,10 +416,19 @@ export class WorkflowEngine {
   // ---- deterministic (non-Claude) stage runners ----
 
   private async executeReadyGate(ticket: Ticket): Promise<AgentResult> {
+    const allTickets = await this.deps.ticketStore.list();
+    const byId = new Map(allTickets.map((t) => [t.frontmatter.id, t]));
+    const readiness = dependencyReadiness(ticket, byId);
+
     const unmet: string[] = [];
-    for (const depId of ticket.frontmatter.dependencies) {
-      const dep = await this.deps.ticketStore.get(depId);
-      if (!dep || dep.frontmatter.status !== 'done') unmet.push(depId);
+    if (!readiness.ready) {
+      if (readiness.reason === 'blocked-by-cancelled-dependency') {
+        unmet.push(
+          `dependenc${readiness.cancelled.length === 1 ? 'y' : 'ies'} cancelled: ${readiness.cancelled.join(', ')} — this ticket cannot proceed automatically; a human must resolve the dependency graph`,
+        );
+      } else {
+        unmet.push(...readiness.pending);
+      }
     }
     if (requiresDesignGate(ticket) && ticket.frontmatter.design_status !== 'synced') {
       unmet.push('design not synced');

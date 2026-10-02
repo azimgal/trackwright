@@ -54,6 +54,14 @@ export const ticketFrontmatterSchema = z
     specialization: z.union([z.enum(SPECIALIZATIONS), z.null()]).default(null),
     secondary_disciplines: z.array(z.enum(DISCIPLINES)).default([]),
     dependencies: z.array(ticketIdSchema).default([]),
+    // Declared path prefixes this ticket's implementation is expected to touch (e.g.
+    // "src/routes/", "docs/"), used only by the batch scheduler (workflow/batch.ts) to decide
+    // whether two tickets in the same dependency wave can safely run concurrently in separate git
+    // worktrees. Empty (the default) means "unknown/unconstrained" — the scheduler treats that as
+    // a potential overlap with everything and serializes, never guesses. This is advisory, not
+    // enforced: the scheduler always re-checks the *actual* diff after the fact and never trusts
+    // a declared scope as proof of no conflict.
+    scope: z.array(z.string()).default([]),
     // 'pending': a design artifact has been drafted and is awaiting human approval (set by
     // engine.ts's executeDesignGate the moment it drafts one — distinct from 'required', which
     // just means "a design is needed" with no artifact yet). 'failed': the post-implementation

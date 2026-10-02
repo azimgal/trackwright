@@ -70,4 +70,42 @@ describe('runTicketCreate validation', () => {
     });
     expect(message).toContain('Created TW-0001');
   });
+
+  it('accepts --depends-on referencing an already-existing ticket', async () => {
+    await runTicketCreate(projectRoot, { title: 'A', context: 'c', discipline: 'development' });
+    const message = await runTicketCreate(projectRoot, {
+      title: 'B depends on A',
+      context: 'c',
+      discipline: 'development',
+      dependsOn: 'TW-0001',
+    });
+    expect(message).toContain('Created TW-0002');
+
+    const store = new TicketStore(path.join(projectRoot, '.trackwright', 'tickets'));
+    const b = await store.getOrThrow('TW-0002');
+    expect(b.frontmatter.dependencies).toEqual(['TW-0001']);
+  });
+
+  it('rejects --depends-on referencing a ticket id that does not exist', async () => {
+    await expect(
+      runTicketCreate(projectRoot, {
+        title: 'B',
+        context: 'c',
+        discipline: 'development',
+        dependsOn: 'TW-9999',
+      }),
+    ).rejects.toThrow(/don't exist yet/);
+  });
+
+  it('parses --scope into a path-prefix array on the new ticket', async () => {
+    await runTicketCreate(projectRoot, {
+      title: 'A',
+      context: 'c',
+      discipline: 'development',
+      scope: 'src/routes/, docs/',
+    });
+    const store = new TicketStore(path.join(projectRoot, '.trackwright', 'tickets'));
+    const a = await store.getOrThrow('TW-0001');
+    expect(a.frontmatter.scope).toEqual(['src/routes/', 'docs/']);
+  });
 });

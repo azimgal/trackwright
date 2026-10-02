@@ -49,6 +49,8 @@ ticket
   .requiredOption('-d, --discipline <discipline>', 'design | development | infrastructure')
   .option('-s, --specialization <specialization>', 'frontend | backend | mobile (development only)')
   .option('-f, --flow <flow>', 'quick | standard | full', 'standard')
+  .option('--depends-on <ids>', 'comma-separated ticket ids this one depends on, e.g. "TW-0001,TW-0002"')
+  .option('--scope <paths>', 'comma-separated declared path prefixes this ticket touches, e.g. "src/routes/,docs/" — advisory, used by `trackwright batch` to decide safe concurrency')
   .option('-C, --cwd <dir>', 'project root', process.cwd())
   .action(async (opts) => {
     try {

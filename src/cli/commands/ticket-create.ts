@@ -4,6 +4,7 @@ import { TicketStore } from '../../tickets/store.js';
 import { newTicket } from '../../tickets/template.js';
 import type { Discipline, FlowMode, Specialization } from '../../workflow/stages.js';
 import { DISCIPLINES, FLOW_MODES, SPECIALIZATIONS } from '../../workflow/stages.js';
+import { buildDependencyGraph, detectCycle } from '../../dependencies/dag.js';
 import { commitBookkeeping } from './init.js';
 
 export interface TicketCreateOptions {
@@ -12,6 +13,11 @@ export interface TicketCreateOptions {
   discipline: string;
   specialization?: string;
   flow?: string;
+  /** Comma-separated ticket ids, e.g. "TW-0001,TW-0002". */
+  dependsOn?: string;
+  /** Comma-separated declared path prefixes, e.g. "src/routes/,docs/" — see
+   * tickets/schema.ts's `scope` field doc comment. */
+  scope?: string;
 }
 
 export class InvalidTicketCreateOptionsError extends Error {}
@@ -52,12 +58,43 @@ function assertFlow(value: string | undefined): FlowMode {
   return value as FlowMode;
 }
 
+function parseCommaList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 export async function runTicketCreate(projectRoot: string, options: TicketCreateOptions): Promise<string> {
   const config = await loadConfig(projectRoot);
   const store = new TicketStore(path.join(projectRoot, config.ticketsDir));
   const id = await store.nextId(config.ticketPrefix);
 
   const discipline = assertDiscipline(options.discipline);
+  const dependencies = parseCommaList(options.dependsOn);
+
+  if (dependencies.length > 0) {
+    const existing = await store.list();
+    const unknown = dependencies.filter((d) => !existing.some((t) => t.frontmatter.id === d));
+    if (unknown.length > 0) {
+      throw new InvalidTicketCreateOptionsError(
+        `--depends-on references ticket id(s) that don't exist yet: ${unknown.join(', ')}`,
+      );
+    }
+    // A brand-new ticket can only ever be the *target* of a cycle its own dependencies create,
+    // never a link already inside one — but check anyway via the real cycle detector, on the
+    // full would-be graph, rather than re-deriving "could this possibly cycle" by hand.
+    const wouldBeGraph = buildDependencyGraph([
+      ...existing.map((t) => ({ id: t.frontmatter.id, dependencies: t.frontmatter.dependencies })),
+      { id, dependencies },
+    ]);
+    const cycle = detectCycle(wouldBeGraph);
+    if (cycle && cycle.includes(id)) {
+      throw new InvalidTicketCreateOptionsError(`--depends-on would create a dependency cycle: ${cycle.join(' -> ')} -> ${cycle[0]}`);
+    }
+  }
+
   const ticket = newTicket({
     id,
     title: options.title,
@@ -65,6 +102,8 @@ export async function runTicketCreate(projectRoot: string, options: TicketCreate
     discipline,
     specialization: assertSpecialization(options.specialization, discipline),
     flow: assertFlow(options.flow),
+    dependencies,
+    scope: parseCommaList(options.scope),
   });
 
   const saved = await store.save(ticket);

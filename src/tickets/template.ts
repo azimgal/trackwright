@@ -9,6 +9,8 @@ export interface NewTicketInput {
   secondaryDisciplines?: Discipline[];
   flow?: FlowMode;
   context: string;
+  dependencies?: string[];
+  scope?: string[];
 }
 
 /** Build a freshly-created ticket. Only Context is required content — Requirements/Acceptance
@@ -24,7 +26,8 @@ export function newTicket(input: NewTicketInput): Ticket {
       discipline: input.discipline,
       specialization: input.specialization ?? null,
       secondary_disciplines: input.secondaryDisciplines ?? [],
-      dependencies: [],
+      dependencies: input.dependencies ?? [],
+      scope: input.scope ?? [],
       design_status: 'not-required',
     },
     sections: {
