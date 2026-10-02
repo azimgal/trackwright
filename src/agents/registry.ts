@@ -76,6 +76,24 @@ function noCdPrefixWarning(commandExamples: string): string {
   );
 }
 
+/**
+ * Lists each of this agent's valid "outcome" values with a one-line meaning, and warns against
+ * the exact kind of paraphrase found in practice: on DF-0007, verification-agent twice wrote
+ * "FAILURE" into the JSON outcome field instead of "VERIFICATION_FAILED"; on DF-0009, the
+ * implementer did the same instead of a real failure outcome. The model substitutes an intuitive
+ * label for the literal contract string regardless of which agent or outcome set is involved, so
+ * every agent gets this explicit glossary — not just the one agent where it was first caught
+ * (found during the release-readiness audit's agent-contract symmetry pass).
+ */
+function outcomeGlossary(descriptions: Partial<Record<RunOutcome, string>>): string {
+  const lines = Object.entries(descriptions).map(([outcome, meaning]) => `- "${outcome}" — ${meaning}`);
+  return (
+    `\n\nHere is what each of your possible "outcome" values means — always write the value exactly ` +
+    `as shown (never a paraphrase like "PASS", "FAIL", or "FAILURE"; those are not valid values ` +
+    `unless listed below):\n${lines.join('\n')}`
+  );
+}
+
 function outputContract(outcomes: readonly RunOutcome[]): string {
   return `
 You must respond with ONLY a single JSON object, no markdown fences, no prose before or after it.
@@ -127,7 +145,14 @@ and a Tasks list. A ticket cannot leave planning without all of these — an emp
 Definition of Done is treated the same as an empty Requirements section, not an optional extra.
 You never write or edit files. If something is genuinely ambiguous, write it as
 "[NEEDS CLARIFICATION: ...]" inside the relevant section rather than guessing, and set outcome to
-NEEDS_CLARIFICATION.` + outputContract(this.validOutcomes);
+NEEDS_CLARIFICATION.` +
+      outcomeGlossary({
+        SUCCESS: 'Requirements, Acceptance Criteria, Definition of Done, Plan, and Tasks are all populated.',
+        NEEDS_CLARIFICATION: 'something genuinely ambiguous — marked inline, not guessed at.',
+        BLOCKED: 'you cannot draft a plan at all without information outside this ticket.',
+        SYSTEM_ERROR: 'you cannot evaluate at all.',
+      }) +
+      outputContract(this.validOutcomes);
   },
   buildTaskPrompt(ctx) {
     return `Ticket ${ctx.ticket.frontmatter.id}: ${ctx.ticket.frontmatter.title}
@@ -193,6 +218,13 @@ you finish, with a commit message referencing this ticket's id. Later stages (co
 independent verification) read \`git diff\` against the base branch, not your uncommitted working
 tree — if you don't commit, they will see an empty diff and the ticket will incorrectly appear to
 have no changes at all, even though you did real work.` +
+        outcomeGlossary({
+          SUCCESS: 'implemented and committed, nothing else required right now.',
+          RETRYABLE_FAILURE: 'you hit a problem you could plausibly fix yourself on another attempt.',
+          BLOCKED: 'you need something outside this ticket (a missing dependency, access, etc.) to proceed.',
+          NEEDS_REPLAN: 'the ticket\'s Plan itself does not match what the code actually needs.',
+          SYSTEM_ERROR: 'you cannot evaluate or complete this at all.',
+        }) +
         noCdPrefixWarning('`git add ...` and `git commit ...`') +
         outputContract(this.validOutcomes);
     },
@@ -238,6 +270,11 @@ implementation.
 The diff you need to review is already provided below in your task prompt — you do not need to
 run \`git diff\` yourself to get it. \`git log\`/\`git diff\` remain available if you want extra
 history or context beyond what's given, but they are optional, not your primary source.` +
+      outcomeGlossary({
+        SUCCESS: 'no blocking issues — quality, architecture, security, and regression risk are acceptable.',
+        RETRYABLE_FAILURE: 'blocking issues found; they route back to implementation to be fixed.',
+        SYSTEM_ERROR: 'you cannot evaluate at all.',
+      }) +
       noCdPrefixWarning('`git diff ...` and `git log ...`') +
       outputContract(this.validOutcomes);
   },
@@ -275,15 +312,15 @@ were doing — only what was required and what was built. This isolation is inte
 makes your judgment independent rather than a rubber stamp of the implementer's own framing.
 
 You never set outcome to "WAIVED" — that outcome exists only for a human to record explicitly.
-Here is what each of your four possible "outcome" values means — always write the value exactly
-as shown (never a paraphrase like "PASS", "FAIL", or "FAILURE"; those are not valid values):
-- "SUCCESS" — the diff satisfies every Acceptance Criterion and Definition of Done item.
-- "VERIFICATION_FAILED" — it clearly does not.
-- "CONCERNS" — real doubt, but not clearly wrong; this blocks automatic progress and needs a human.
-- "SYSTEM_ERROR" — you cannot evaluate at all.
 
 The diff and test evidence you need are already provided below in your task prompt — you do not
 need to run \`git diff\` yourself to get them.` +
+      outcomeGlossary({
+        SUCCESS: 'the diff satisfies every Acceptance Criterion and Definition of Done item.',
+        VERIFICATION_FAILED: 'it clearly does not.',
+        CONCERNS: 'real doubt, but not clearly wrong; this blocks automatic progress and needs a human.',
+        SYSTEM_ERROR: 'you cannot evaluate at all.',
+      }) +
       noCdPrefixWarning('`git diff ...`') +
       outputContract(this.validOutcomes);
   },
@@ -331,7 +368,12 @@ whether this ticket's work is design-sensitive: does it touch anything a user wo
 interact with visually (UI markup, styling, layout, visual components), as opposed to purely
 backend/infra/data logic with no visual surface? If you are genuinely unsure, fail closed: say it
 IS design-sensitive (data.designRequired: true) rather than risk silently skipping a needed design
-review — a false "not required" is worse than an unnecessary design gate.` + outputContract(this.validOutcomes);
+review — a false "not required" is worse than an unnecessary design gate.` +
+      outcomeGlossary({
+        SUCCESS: 'you reached a decision (data.designRequired is set to true or false).',
+        SYSTEM_ERROR: 'you cannot evaluate at all.',
+      }) +
+      outputContract(this.validOutcomes);
   },
   buildTaskPrompt(ctx) {
     return `Ticket ${ctx.ticket.frontmatter.id}: ${ctx.ticket.frontmatter.title}

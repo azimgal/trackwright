@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getAgent } from '../src/agents/registry.js';
+import { getAgent, AGENTS } from '../src/agents/registry.js';
 
 /**
  * Regression coverage for a real gap found twice during the DF-0007 dogfood run: the
@@ -93,5 +93,23 @@ describe('every Bash-scoped git permission has a matching PowerShell one', () =>
     expect(agent.allowedTools).toContain('PowerShell(git add*)');
     expect(agent.allowedTools).toContain('Bash(git commit*)');
     expect(agent.allowedTools).toContain('PowerShell(git commit*)');
+  });
+});
+
+/**
+ * Symmetry coverage from the release-readiness audit's agent-contract pass: the "write the
+ * outcome value exactly, never a paraphrase" treatment was previously verification-agent-only,
+ * even though the implementer independently hit the exact same "FAILURE" paraphrase on DF-0009.
+ * Every agent's system prompt must now list every one of its own validOutcomes by exact value —
+ * this test fails if a future agent (or a future validOutcomes change) ever drifts out of sync
+ * with its own prompt.
+ */
+describe('every agent documents every one of its valid outcomes in its own prompt', () => {
+  it.each(Object.keys(AGENTS))('%s prompt mentions every value in its validOutcomes', (agentName) => {
+    const agent = getAgent(agentName);
+    const prompt = agent.buildSystemPrompt();
+    for (const outcome of agent.validOutcomes) {
+      expect(prompt).toContain(`"${outcome}"`);
+    }
   });
 });
