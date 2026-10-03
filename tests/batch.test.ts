@@ -1,10 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import yaml from 'js-yaml';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { initConfig, loadConfig } from '../src/config/loader.js';
+import { configPath, initConfig, loadConfig } from '../src/config/loader.js';
 import { TicketStore } from '../src/tickets/store.js';
 import { newTicket } from '../src/tickets/template.js';
 import { runBatch, partitionForSafeConcurrency } from '../src/workflow/batch.js';
@@ -106,10 +107,24 @@ describe('runBatch', () => {
     await createReadyTicket('TW-0001');
     await createReadyTicket('TW-0002');
     await createReadyTicket('TW-0003', { dependencies: ['TW-0001', 'TW-0002'] });
+    // This fixture has no package.json, so the default npm-based checks would (correctly) fail;
+    // give it checks that pass so the run can genuinely reach Done.
+    const pass = 'node -e "process.exit(0)"';
+    const config = await loadConfig(projectRoot);
+    await writeFile(configPath(projectRoot), yaml.dump({ ...config, checks: { fast: [pass], test: [pass], premerge: [pass] } }), 'utf8');
 
     const result = await runBatch(projectRoot, ['TW-0001', 'TW-0002', 'TW-0003'], { dryRun: true, maxSteps: 15 });
 
     expect(result.waves).toEqual([['TW-0001', 'TW-0002'], ['TW-0003']]);
+    // End to end, not just ordering: once its dependencies reach Done, the dependent ticket must
+    // actually clear the Ready gate and finish too. Regression: the engine used to leave a
+    // finished ticket's status at "draft", so a dependent stayed BLOCKED at Ready forever.
+    for (const r of result.results) expect(r.result?.stopReason).toBe('done');
+    for (const id of ['TW-0001', 'TW-0002', 'TW-0003']) {
+      const t = await ticketStore.getOrThrow(id);
+      expect(t.frontmatter.stage).toBe('done');
+      expect(t.frontmatter.status).toBe('done');
+    }
   });
 
   it('throws DependencyCycleError up front and runs nothing when the requested set has a cycle', async () => {

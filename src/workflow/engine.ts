@@ -97,6 +97,11 @@ export class WorkflowEngine {
       if (currentStage === 'done') {
         return { ticket, steps, stopReason: 'done' };
       }
+      // A cancelled ticket is never driven forward again — not by run, not by batch. Status is
+      // a human decision (see stages.ts, STATUSES); only a human un-cancelling it re-opens it.
+      if (ticket.frontmatter.status === 'cancelled') {
+        return { ticket, steps, stopReason: 'cancelled' };
+      }
 
       const step = await this.step(ticketId);
       steps.push(step);
@@ -105,6 +110,11 @@ export class WorkflowEngine {
       if (step.toStage === 'done') {
         const finalTicket = await this.deps.ticketStore.getOrThrow(ticketId);
         return { ticket: finalTicket, steps, stopReason: 'done' };
+      }
+
+      if (step.outcome === 'CANCELLED') {
+        const finalTicket = await this.deps.ticketStore.getOrThrow(ticketId);
+        return { ticket: finalTicket, steps, stopReason: 'cancelled' };
       }
 
       const madeProgress = step.toStage !== step.fromStage;
@@ -181,7 +191,9 @@ export class WorkflowEngine {
       frontmatter: {
         ...ticket.frontmatter,
         stage: toStage,
-        status: result.outcome === 'CANCELLED' ? 'cancelled' : ticket.frontmatter.status,
+        // Reaching the done stage marks the ticket done — dependencyReadiness (Ready gate, batch
+        // waves) keys off status, so without this a finished dependency never unblocked anything.
+        status: result.outcome === 'CANCELLED' ? 'cancelled' : toStage === 'done' ? 'done' : ticket.frontmatter.status,
         design_status: this.designStatusFor(result) ?? ticket.frontmatter.design_status,
       },
     };

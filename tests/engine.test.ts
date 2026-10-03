@@ -686,3 +686,39 @@ describe('per-specialization checks (checksBySpecialization)', () => {
     expect(result.stopReason).not.toBe('done');
   });
 });
+
+describe('cancelled tickets', () => {
+  it('run() never drives a cancelled ticket — no agent invocation, no stage change', async () => {
+    const t = newTicket({ id: 'TW-0030', title: 'cancelled', discipline: 'development', specialization: 'backend', context: 'c' });
+    await ticketStore.save({ ...t, frontmatter: { ...t.frontmatter, status: 'cancelled' } });
+    const runner = new MockClaudeRunner();
+    const engine = await makeEngine(runner);
+
+    const result = await engine.run('TW-0030');
+
+    expect(result.stopReason).toBe('cancelled');
+    expect(result.steps).toHaveLength(0);
+    expect(runner.callCount).toBe(0);
+    expect(result.ticket.frontmatter.stage).toBe('planning');
+  });
+
+});
+
+describe('ticket status follows the done stage', () => {
+  it('reaching done sets status "done", which is what unblocks dependents at Ready', async () => {
+    await createReadyTicket('TW-0040');
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    const engine = await makeEngine(runner);
+    const result = await engine.run('TW-0040');
+    expect(result.stopReason).toBe('done');
+    expect(result.ticket.frontmatter.status).toBe('done');
+
+    const dependent = newTicket({ id: 'TW-0041', title: 'dep', discipline: 'development', specialization: 'backend', context: 'c', dependencies: ['TW-0040'] });
+    await ticketStore.save(dependent);
+    const runner2 = new MockClaudeRunner();
+    runner2.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    const result2 = await (await makeEngine(runner2)).run('TW-0041');
+    expect(result2.stopReason).toBe('done');
+  });
+});
