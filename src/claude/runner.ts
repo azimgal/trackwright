@@ -97,7 +97,7 @@ export class ClaudeCliRunner implements ClaudeRunner {
   private parseAgentPayload(envelope: ClaudeJsonEnvelope, durationMs: number): AgentResult {
     let payload: Record<string, unknown>;
     try {
-      payload = JSON.parse(this.extractJson(envelope.result)) as Record<string, unknown>;
+      payload = parseAgentJson(envelope.result);
     } catch {
       return this.systemError(
         `agent response was not parseable JSON: ${envelope.result.slice(0, 500)}`,
@@ -120,13 +120,6 @@ export class ClaudeCliRunner implements ClaudeRunner {
       costUsd: envelope.total_cost_usd,
       raw: envelope,
     };
-  }
-
-  /** Agents are instructed to answer with only JSON, but strip incidental code-fence wrapping defensively. */
-  private extractJson(text: string): string {
-    const trimmed = text.trim();
-    const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(trimmed);
-    return fenced ? fenced[1]!.trim() : trimmed;
   }
 
   private systemError(reason: string, durationMs: number, raw?: unknown): AgentResult {
@@ -270,4 +263,32 @@ export function resolveSpawn(
   const isBatchFile = /\.(cmd|bat)$/i.test(target);
   const commandLine = [target.replace(CMD_META, '^$1'), ...args.map((a) => quoteForCmd(a, isBatchFile))].join(' ');
   return { command: commandLine, spawnArgs: [], useShell: true };
+}
+
+/**
+ * Agents are told to answer with only a JSON object, but real responses sometimes wrap it — found
+ * in a real dogfood run: one sentence of prose, then the object in a ```json fence, which cost a
+ * whole planning re-invocation as SYSTEM_ERROR. Tries, in order: the whole text, a whole-text
+ * fence, the last fenced block anywhere, then the outermost {...} span. Only a plain JSON object
+ * is accepted; the outcome inside is still validated against the agent's own contract upstream.
+ */
+export function parseAgentJson(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  const candidates = [trimmed];
+  const whole = /^```(?:json)?\s*([\s\S]*?)\s*```$/.exec(trimmed);
+  if (whole) candidates.push(whole[1]!);
+  const fences = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
+  if (fences.length > 0) candidates.push(fences[fences.length - 1]![1]!);
+  const first = trimmed.indexOf('{');
+  const last = trimmed.lastIndexOf('}');
+  if (first >= 0 && last > first) candidates.push(trimmed.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate.trim());
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      // try the next candidate
+    }
+  }
+  throw new SyntaxError('no JSON object found in agent response');
 }

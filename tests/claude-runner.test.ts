@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ClaudeCliRunner, resolveSpawn } from '../src/claude/runner.js';
+import { ClaudeCliRunner, parseAgentJson, resolveSpawn } from '../src/claude/runner.js';
 import { getAgent } from '../src/agents/registry.js';
 import type { AgentInvocation } from '../src/claude/types.js';
 
@@ -118,5 +118,27 @@ describe('resolveSpawn', () => {
   it('never uses a shell on POSIX and passes argv unchanged', () => {
     const args = ['--allowedTools', 'Bash(git add*)', 'a & b'];
     expect(resolveSpawn('claude', args, 'linux')).toEqual({ command: 'claude', spawnArgs: args, useShell: false });
+  });
+});
+
+describe('parseAgentJson', () => {
+  const obj = { outcome: 'SUCCESS', summary: 's', data: { a: 1 } };
+  it('accepts bare JSON and a whole-text fence', () => {
+    expect(parseAgentJson(JSON.stringify(obj))).toEqual(obj);
+    expect(parseAgentJson('```json\n' + JSON.stringify(obj) + '\n```')).toEqual(obj);
+  });
+
+  it('accepts prose followed by a fenced object (seen in a real dogfood planning response)', () => {
+    const text = 'Everything needed is clear.\n\n```json\n' + JSON.stringify(obj, null, 2) + '\n```';
+    expect(parseAgentJson(text)).toEqual(obj);
+  });
+
+  it('accepts an object surrounded by prose without a fence', () => {
+    expect(parseAgentJson('Here you go: ' + JSON.stringify(obj) + ' — done.')).toEqual(obj);
+  });
+
+  it('rejects responses with no JSON object (arrays, plain text)', () => {
+    expect(() => parseAgentJson('I have a question first: which file?')).toThrow();
+    expect(() => parseAgentJson('[1, 2]')).toThrow();
   });
 });
