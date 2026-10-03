@@ -86,6 +86,8 @@ describe('ClaudeCliRunner (real spawn path, fake claude binary)', () => {
     // The multi-line system prompt arrives complete, via a file — never as argv text.
     expect(record.systemPrompt).toBe(invocation.systemPrompt);
     expect(argv).not.toContain('--system-prompt');
+    // A fresh, context-free process per stage: never resumes or continues an earlier session.
+    for (const flag of ['--resume', '-r', '--continue', '-c', '--session-id', '--fork-session']) expect(argv).not.toContain(flag);
   });
 
   it('never lets ticket content reach argv or a shell: hostile text travels only over stdin', async () => {
