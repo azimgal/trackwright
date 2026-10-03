@@ -57,6 +57,33 @@ export class GitRepo {
     return this.git(['status', '--porcelain', '--', '.', ...pathspecs]);
   }
 
+  /** True if `ancestor` is reachable from `descendant` (i.e. `descendant` already contains it). */
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    try {
+      await this.git(['merge-base', '--is-ancestor', ancestor, descendant]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Would merging `other` into HEAD conflict? Read-only: `git merge-tree --write-tree` computes
+   * the merge purely in the object store — no working tree, index, or ref is touched. Returns the
+   * conflicting paths (empty = merges cleanly), or null if this git cannot answer (< 2.38).
+   */
+  async mergeConflicts(other: string): Promise<string[] | null> {
+    try {
+      await this.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', 'HEAD', other]);
+      return [];
+    } catch (err) {
+      const e = err as { code?: number; stdout?: string };
+      if (e.code !== 1 || typeof e.stdout !== 'string') return null;
+      // Exit 1 = conflicts: first line is the tree id, then one conflicted path per line.
+      return [...new Set(e.stdout.split('\n').slice(1).map((l) => l.trim()).filter(Boolean))];
+    }
+  }
+
   async createBranch(name: string): Promise<void> {
     await this.git(['checkout', '-b', name]);
   }

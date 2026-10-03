@@ -147,8 +147,11 @@ describe('runBatch', () => {
 
     const result = await runBatch(projectRoot, ['TW-0001', 'TW-0002'], { dryRun: true, maxSteps: 15, maxParallel: 2 });
 
-    expect(result.results.every((r) => r.outcome === 'completed')).toBe(true);
-    expect(result.results.filter((r) => r.ranConcurrently)).toHaveLength(2);
+    // Asserted as one structured value so a failure shows *why* (e.g. the worktree fallback's error).
+    expect(result.results.map((r) => ({ id: r.ticketId, outcome: r.outcome, concurrent: r.ranConcurrently, error: r.error ?? null }))).toEqual([
+      { id: 'TW-0001', outcome: 'completed', concurrent: true, error: null },
+      { id: 'TW-0002', outcome: 'completed', concurrent: true, error: null },
+    ]);
 
     // Worktrees must be cleaned up afterward — no trace left behind.
     const config = await loadConfig(projectRoot);

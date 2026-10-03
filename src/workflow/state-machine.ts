@@ -110,7 +110,9 @@ export const STAGE_DEFINITIONS: Readonly<Record<Stage, StageDefinition>> = {
     runner: 'awaiting-merge-check',
     onOutcome: {
       SUCCESS: 'done',
-      RETRYABLE_FAILURE: 'awaiting-merge', // e.g. rebase against a moved target branch, then re-check
+      RETRYABLE_FAILURE: 'awaiting-merge', // a failing premerge check, re-checked after a fix
+      // Needs a human: a moved/conflicting target branch, a regressed dependency, an unsynced design.
+      BLOCKED: 'awaiting-merge',
       // A regression only the heavy suite catches is a Testing-level finding, not a Development one.
       VERIFICATION_FAILED: 'testing',
     },

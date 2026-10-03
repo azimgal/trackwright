@@ -38,4 +38,7 @@ export interface EvidenceRecord {
   permissionDenials?: unknown[];
   summary: string;
   costUsd?: number;
+  /** Awaiting Merge only: the machine verdict and every reason it is (or is not) eligible. */
+  mergeEligible?: boolean;
+  mergeReasons?: string[];
 }

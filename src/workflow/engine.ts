@@ -226,6 +226,7 @@ export class WorkflowEngine {
       permissionDenials: this.permissionDenialsFor(result.raw),
       summary: result.summary,
       costUsd: result.costUsd,
+      ...this.mergeEvidenceFor(stage, result),
     });
 
     return {
@@ -262,6 +263,16 @@ export class WorkflowEngine {
     return typeof value === 'string' && (DESIGN_STATUSES as readonly string[]).includes(value)
       ? (value as DesignStatus)
       : null;
+  }
+
+/** Awaiting Merge's verdict (merge_eligible + reasons) is part of the durable audit trail. */
+  private mergeEvidenceFor(stage: Stage, result: AgentResult): { mergeEligible?: boolean; mergeReasons?: string[] } {
+    if (stage !== 'awaiting-merge') return {};
+    const data = result.data as { merge_eligible?: unknown; merge_reasons?: unknown };
+    return {
+      mergeEligible: data.merge_eligible === true,
+      mergeReasons: Array.isArray(data.merge_reasons) ? data.merge_reasons.map(String) : [result.summary],
+    };
   }
 
   private sectionUpdatesFor(stage: Stage, result: AgentResult): Record<string, string> {
@@ -711,7 +722,8 @@ export class WorkflowEngine {
    * gets this for free rather than needing to rediscover the same fix independently.
    */
   private async projectDiff(): Promise<string> {
-    const diff = await this.deps.gitRepo.diffAgainstBase(undefined, [CONFIG_DIR]);
+    const target = this.deps.config.targetBranch;
+    const diff = await this.deps.gitRepo.diffAgainstBase(target ? [target] : undefined, [CONFIG_DIR]);
     return this.boundDiff(diff);
   }
 
@@ -817,25 +829,113 @@ export class WorkflowEngine {
         durationMs: 0,
       };
     }
+
+    // Re-checks that need a human, never a blind retry: a dependency that regressed or was
+    // cancelled after Ready, a design that is no longer synced (or whose Requirements changed
+    // since approval), and a target branch that moved on or would conflict.
+    const blockers = [
+      ...(await this.dependencyRecheck(ticket)),
+      ...(await this.designRecheck(ticket)),
+    ];
+    const target = await this.targetCompatibility();
+    blockers.push(...target.blockers);
+    if (blockers.length > 0) {
+      return {
+        outcome: 'BLOCKED',
+        summary: `merge_eligible=false — ${blockers.join('; ')}`,
+        data: { merge_eligible: false, merge_reasons: blockers },
+        failureReason: blockers.join('\n'),
+        durationMs: 0,
+      };
+    }
+
     const summary = await runChecks(this.checksFor(ticket, 'premerge'), this.deps.cwd);
     if (!summary.passed) {
       const failing = summary.results[summary.results.length - 1]!;
       return {
         outcome: 'RETRYABLE_FAILURE',
         summary: `premerge check failed: ${failing.command}`,
-        data: { results: summary.results },
+        data: { results: summary.results, merge_eligible: false, merge_reasons: [`premerge check failed: ${failing.command}`] },
         failureReason: failing.outputTail,
         durationMs: summary.results.reduce((a, r) => a + r.durationMs, 0),
       };
     }
-    const mergeEligible = allowsAutoMergeEligibility(ticket);
+    const reasons = [...target.notes];
+    if (!allowsAutoMergeEligibility(ticket)) reasons.push('this ticket\'s routing does not allow merge eligibility (needs a human merge decision)');
+    const mergeEligible = reasons.length === 0;
     return {
       outcome: 'SUCCESS',
       summary: mergeEligible
-        ? 'premerge checks green, evidence fresh — merge_eligible=true'
-        : 'premerge checks green, but this ticket\'s routing does not allow auto-merge eligibility',
-      data: { merge_eligible: mergeEligible },
+        ? `premerge checks green, evidence fresh, ${target.description} — merge_eligible=true`
+        : `premerge checks green — merge_eligible=false: ${reasons.join('; ')}`,
+      data: { merge_eligible: mergeEligible, merge_reasons: reasons },
       durationMs: summary.results.reduce((a, r) => a + r.durationMs, 0),
+    };
+  }
+
+  private async dependencyRecheck(ticket: Ticket): Promise<string[]> {
+    if (ticket.frontmatter.dependencies.length === 0) return [];
+    const all = await this.deps.ticketStore.list();
+    const readiness = dependencyReadiness(ticket, new Map(all.map((t) => [t.frontmatter.id, t])));
+    if (readiness.ready) return [];
+    return readiness.reason === 'blocked-by-cancelled-dependency'
+      ? [`dependency cancelled since Ready: ${readiness.cancelled.join(', ')}`]
+      : [`dependency no longer done: ${readiness.pending.join(', ')}`];
+  }
+
+  private async designRecheck(ticket: Ticket): Promise<string[]> {
+    const status = ticket.frontmatter.design_status;
+    if (requiresDesignGate(ticket) && status !== 'synced') return [`design_status is "${status}", not "synced"`];
+    if (status !== 'synced') return [];
+    const artifact = await this.designProvider.getLatestForTicket(ticket.frontmatter.id);
+    if (!artifact || artifact.status !== 'approved') return ['design is no longer approved (stale or replaced since sync)'];
+    const currentRequirementsHash = hashText(ticket.sections['Requirements'] ?? '');
+    if (isDesignStale({ artifact, currentRequirementsHash, currentGitSha: null })) {
+      return ['design is stale: Requirements changed since the design was approved'];
+    }
+    return [];
+  }
+
+  /**
+   * Target-branch compatibility, read-only (never fetches, merges, or rebases). `blockers` stop
+   * the ticket at Awaiting Merge for a human; `notes` keep merge_eligible false without blocking
+   * (the check could not be performed, so eligibility is not claimed).
+   */
+  private async targetCompatibility(): Promise<{ blockers: string[]; notes: string[]; description: string }> {
+    const git = this.deps.gitRepo;
+    if (!(await git.isGitRepository())) return { blockers: [], notes: ['not a git repository — target branch compatibility not checked'], description: '' };
+    const configured = this.deps.config.targetBranch;
+    let target: string | null = null;
+    if (configured) {
+      if (!(await git.branchExists(configured))) {
+        return { blockers: [`configured targetBranch "${configured}" does not exist`], notes: [], description: '' };
+      }
+      target = configured;
+    } else {
+      for (const candidate of ['main', 'master']) {
+        if (await git.branchExists(candidate)) {
+          target = candidate;
+          break;
+        }
+      }
+    }
+    if (!target) {
+      return { blockers: [], notes: ['no target branch found (main/master absent; set targetBranch in config.yaml) — compatibility not checked'], description: '' };
+    }
+    if (await git.isAncestor(target, 'HEAD')) {
+      return { blockers: [], notes: [], description: `up to date with ${target}` };
+    }
+    const conflicts = await git.mergeConflicts(target);
+    const detail =
+      conflicts === null
+        ? 'merge compatibility could not be computed (git >= 2.38 needed for merge-tree)'
+        : conflicts.length > 0
+          ? `merging it would conflict in: ${conflicts.join(', ')}`
+          : 'it merges cleanly, but the verified code does not include it';
+    return {
+      blockers: [`target branch "${target}" has advanced since this branch was cut — ${detail}; integrate ${target} into this branch yourself, then re-run (changed code is re-tested and re-verified)`],
+      notes: [],
+      description: '',
     };
   }
 }
