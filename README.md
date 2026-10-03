@@ -115,6 +115,8 @@ the ticket's current stage.
 The defaults assume an npm project. A project without `package.json` must set its own `checks`,
 otherwise every check fails — on purpose: a check that cannot run is a failure, never a pass.
 Check commands run through your shell with the same trust as a `package.json` script.
+`--dry-run` mocks only the Claude agents — your configured checks still run for real, so a project
+whose checks currently fail will stop at Development/Testing in a dry run too.
 
 ## CLI reference
 

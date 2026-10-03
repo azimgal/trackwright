@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { loadConfig } from '../../config/loader.js';
+import { CONFIG_DIR, loadConfig } from '../../config/loader.js';
 import { TicketStore } from '../../tickets/store.js';
 import { EvidenceStore } from '../../evidence/store.js';
 import { GitRepo } from '../../git/repo.js';
@@ -62,7 +62,7 @@ export async function runTicketWaive(projectRoot: string, ticketId: string, reas
 
 async function safeSha(repo: GitRepo): Promise<string | null> {
   try {
-    return await repo.currentSha();
+    return await repo.lastRelevantSha([CONFIG_DIR]); // same SHA basis as the engine's evidence
   } catch {
     return null;
   }
