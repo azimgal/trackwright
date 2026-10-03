@@ -10,6 +10,7 @@ export function defaultConfig(ticketPrefix: string): ProjectConfig {
       test: ['npm test --if-present'],
       premerge: ['npm run build --if-present'],
     },
+    checksBySpecialization: {},
     retryCeiling: 3,
     claude: {
       binary: 'claude',

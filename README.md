@@ -216,7 +216,7 @@ silent permission denial the moment the model happens to choose the other shell.
 - A declarative ten-stage state machine that rejects illegal transitions.
 - A real `ClaudeCliRunner` that spawns isolated `claude -p --output-format json` processes per
   stage, plus a `MockClaudeRunner` for deterministic tests and `--dry-run`.
-- Agents: `planner`, `implementer.{generic,frontend,backend,infrastructure}`, `code-reviewer`,
+- Agents: `planner`, `implementer.{generic,frontend,backend,mobile,infrastructure}`, `code-reviewer`,
   `verification-agent`, `design-gate-agent` — each with an explicit tool-permission profile and a
   symmetric "write your outcome exactly, never a paraphrase" contract.
 - Discipline/specialization routing (`design` | `development.{frontend,backend,mobile}` |
@@ -260,8 +260,11 @@ Read this before trusting the tool with anything real. Split by kind, so "intent
   [docs/architecture.md](docs/architecture.md#claude-first-not-provider-agnostic).
 - **No parallel execution across tickets.** The dependency graph (`dependencies` field) is read for
   readiness, but there is no scheduler running multiple tickets concurrently yet.
-- **No dedicated mobile implementer agent.** Mobile-specialization tickets route to the generic
-  implementer (`policies/routing.ts` flags this explicitly via `isMobileGap`).
+- **Mobile support is a routing + configuration contract, not a bundled toolchain.**
+  `development.mobile` tickets route to a dedicated `implementer.mobile` agent, and a project can
+  give mobile (or frontend/backend) its own `fast`/`test`/`premerge` commands via
+  `checksBySpecialization` in `config.yaml`. Trackwright does not ship or assume any Android/iOS
+  SDK, emulator, or simulator — your configured commands decide what "mobile tests pass" means.
 - **Architecture review is a stub.** It's a deterministic check for unresolved clarification
   markers in a ticket's "Architecture decisions" section, not a real review agent.
 

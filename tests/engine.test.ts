@@ -642,3 +642,47 @@ describe('design_status write-back', () => {
     expect(ticket.frontmatter.design_status).toBe('stale');
   });
 });
+
+describe('per-specialization checks (checksBySpecialization)', () => {
+  async function engineWith(runner: MockClaudeRunner, checksBySpecialization: Record<string, unknown>) {
+    const base = await initConfig(projectRoot, 'TW');
+    const config = {
+      ...base,
+      checks: { fast: [], test: [FAIL_CHECK], premerge: [FAIL_CHECK] },
+      checksBySpecialization: checksBySpecialization as typeof base.checksBySpecialization,
+    };
+    return new WorkflowEngine({ ticketStore, evidenceStore, claudeRunner: runner, config, gitRepo: new GitRepo(projectRoot), cwd: projectRoot });
+  }
+
+  it('a mobile ticket routes to implementer.mobile and runs the mobile test/premerge commands, not the global ones', async () => {
+    const ticket = newTicket({ id: 'TW-0020', title: 'mobile', discipline: 'development', specialization: 'mobile', context: 'ctx' });
+    await ticketStore.save(ticket);
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    runner.enqueueFor('design-gate-agent', { outcome: 'SUCCESS', summary: 'no ui', data: { designRequired: false, reasoning: 'logic only' }, durationMs: 1 });
+
+    // Global test/premerge always fail; only the mobile override passes. Reaching Done proves the
+    // override (not the global tier) was what Testing and Awaiting Merge actually ran.
+    const engine = await engineWith(runner, { mobile: { test: [PASS_CHECK], premerge: [PASS_CHECK] } });
+    const result = await engine.run('TW-0020');
+
+    expect(result.stopReason).toBe('done');
+    expect(runner.invocations.map((i) => i.agentName)).toContain('implementer.mobile');
+    expect(runner.invocations.map((i) => i.agentName)).not.toContain('implementer.generic');
+  });
+
+  it('a tier left unset for the specialization falls back to the global checks', async () => {
+    const ticket = newTicket({ id: 'TW-0021', title: 'mobile', discipline: 'development', specialization: 'mobile', context: 'ctx' });
+    await ticketStore.save(ticket);
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    runner.enqueueFor('design-gate-agent', { outcome: 'SUCCESS', summary: 'no ui', data: { designRequired: false, reasoning: 'logic only' }, durationMs: 1 });
+
+    // mobile overrides only `test`; premerge falls back to the global FAIL_CHECK.
+    const engine = await engineWith(runner, { mobile: { test: [PASS_CHECK] } });
+    const result = await engine.run('TW-0021', { maxSteps: 14 });
+
+    expect(result.ticket.frontmatter.stage).toBe('awaiting-merge');
+    expect(result.stopReason).not.toBe('done');
+  });
+});

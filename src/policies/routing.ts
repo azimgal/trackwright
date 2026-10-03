@@ -44,10 +44,7 @@ export const ROUTING_TABLE: readonly RoutingEntry[] = [
   {
     discipline: 'development',
     specialization: 'mobile',
-    // No mobile-implementer agent exists yet (see docs/roadmap.md open question) — routes to the
-    // generic implementer so the pipeline stays functional, but this is a documented gap, not a
-    // silent substitution: callers can check `isMobileGap` below.
-    implementerAgent: 'implementer.generic',
+    implementerAgent: 'implementer.mobile',
     requiresCodeReview: true,
     requiresDesignGateByDefault: false,
     allowsAutoMergeEligibility: true,
@@ -100,10 +97,6 @@ export function primaryRouting(ticket: Ticket): RoutingEntry {
  */
 export function secondaryRoutings(ticket: Ticket): RoutingEntry[] {
   return ticket.frontmatter.secondary_disciplines.map((d) => lookup(d, null));
-}
-
-export function isMobileGap(entry: RoutingEntry): boolean {
-  return entry.specialization === 'mobile' && entry.implementerAgent === 'implementer.generic';
 }
 
 /** Union of implementer agents that must run in Development's fan-out for this ticket. */

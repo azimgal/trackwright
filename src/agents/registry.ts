@@ -395,6 +395,14 @@ export const AGENTS: Readonly<Record<string, AgentDefinition>> = {
   'implementer.frontend': implementer('implementer.frontend', 'frontend', 'sonnet'),
   'implementer.backend': implementer('implementer.backend', 'backend', 'opus'),
   'implementer.infrastructure': implementer('implementer.infrastructure', 'infrastructure', 'sonnet'),
+  // Mobile (React Native / Flutter / native iOS+Android, whatever the consumer project actually
+  // uses) gets the same implementer() shape and safety profile as every other specialization —
+  // no Android/iOS SDK, emulator, or simulator is bundled or assumed. The consuming project
+  // configures its own mobile build/test commands via checksBySpecialization.mobile in
+  // config.yaml (see config/schema.ts); this agent writes code and commits it, exactly like
+  // implementer.frontend/backend, and never runs those build/test commands itself — the
+  // dedicated Testing stage does, deterministically, via Trackwright's own process spawn.
+  'implementer.mobile': implementer('implementer.mobile', 'mobile', 'sonnet'),
   'code-reviewer': CODE_REVIEWER,
   'verification-agent': VERIFICATION_AGENT,
   'design-gate-agent': DESIGN_GATE_AGENT,

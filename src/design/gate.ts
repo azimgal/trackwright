@@ -32,7 +32,8 @@ export function deterministicDesignGate(ticket: Ticket): DesignGateDecision {
   if (ticket.frontmatter.specialization === 'backend') return 'not-required';
 
   // development with specialization null (generic) or 'mobile': genuinely ambiguous by these
-  // rules alone — a generic development ticket could easily touch UI or not, and MVP has no
-  // mobile-specific signal yet (see policies/routing.ts, isMobileGap).
+  // rules alone — a generic development ticket could easily touch UI or not, and a mobile ticket
+  // could be a pure-logic change or a full screen redesign; neither has a confident deterministic
+  // signal, so both escalate to the design-gate-agent's judgment.
   return 'ambiguous';
 }

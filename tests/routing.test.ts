@@ -3,7 +3,6 @@ import { newTicket } from '../src/tickets/template.js';
 import {
   allowsAutoMergeEligibility,
   implementerAgentsFor,
-  isMobileGap,
   primaryRouting,
   requiresDesignGate,
   secondaryRoutings,
@@ -25,9 +24,9 @@ describe('discipline/specialization routing', () => {
     expect(primaryRouting(ticket).implementerAgent).toBe('implementer.generic');
   });
 
-  it('flags mobile as a known implementer gap rather than silently pretending it is covered', () => {
+  it('routes development.mobile to a real, dedicated mobile implementer — no longer a gap', () => {
     const ticket = newTicket({ id: 'TW-0004', title: 'x', discipline: 'development', specialization: 'mobile', context: 'c' });
-    expect(isMobileGap(primaryRouting(ticket))).toBe(true);
+    expect(primaryRouting(ticket).implementerAgent).toBe('implementer.mobile');
   });
 
   it('unions requirements across primary and secondary disciplines', () => {

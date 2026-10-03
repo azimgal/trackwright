@@ -41,8 +41,13 @@ describe('verification-agent system prompt', () => {
  * still returning SUCCESS (the model noticed and disclosed the gap in its own summary each time,
  * but that is not a guarantee). Every Bash-using agent's prompt must carry this warning.
  */
+/** Every Bash-using agent — every implementer.*, plus code-reviewer and verification-agent —
+ * generalized from a hardcoded 'implementer.backend' so a newly added implementer (e.g.
+ * implementer.mobile) is automatically covered rather than silently skipped. */
+const BASH_USING_AGENTS = Object.keys(AGENTS).filter((name) => name.startsWith('implementer.')).concat(['code-reviewer', 'verification-agent']);
+
 describe('Bash-using agents all warn against a leading "cd"', () => {
-  it.each(['implementer.backend', 'code-reviewer', 'verification-agent'])(
+  it.each(BASH_USING_AGENTS)(
     '%s system prompt warns against prefixing commands with "cd ... &&"',
     (agentName) => {
       const prompt = getAgent(agentName).buildSystemPrompt();
@@ -78,7 +83,7 @@ describe('every Bash-scoped git permission has a matching PowerShell one', () =>
     return tools.filter((t) => t.startsWith('PowerShell(')).map((t) => t.slice('PowerShell('.length));
   }
 
-  it.each(['implementer.backend', 'code-reviewer', 'verification-agent'])(
+  it.each(BASH_USING_AGENTS)(
     '%s: every allowed Bash(...) git pattern has a PowerShell(...) twin',
     (agentName) => {
       const agent = getAgent(agentName);

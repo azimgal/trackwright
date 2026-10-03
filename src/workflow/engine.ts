@@ -365,7 +365,7 @@ export class WorkflowEngine {
       case 'code-reviewer':
         return this.executeCodeReview(ticket);
       case 'gate-runner':
-        return this.executeChecks(this.deps.config.checks.test, 'development'); // routes RETRYABLE_FAILURE -> development
+        return this.executeChecks(this.checksFor(ticket, 'test'), 'development'); // routes RETRYABLE_FAILURE -> development
       case 'verification-agent':
         return this.executeVerification(ticket);
       case 'awaiting-merge-check':
@@ -542,6 +542,19 @@ export class WorkflowEngine {
     };
   }
 
+  /**
+   * Mobile-contract completion: a project with both a web frontend and a React Native/Flutter/
+   * native mobile app needs genuinely different test/build commands for each — one global
+   * `checks.*` set can't serve both. Falls back to the global tier when the ticket's
+   * specialization has no override configured (or has no specialization at all), so a
+   * single-stack project's config.yaml never needs to change.
+   */
+  private checksFor(ticket: Ticket, tier: 'fast' | 'test' | 'premerge'): readonly string[] {
+    const specialization = ticket.frontmatter.specialization;
+    const override = specialization ? this.deps.config.checksBySpecialization[specialization]?.[tier] : undefined;
+    return override ?? this.deps.config.checks[tier];
+  }
+
   private async executeChecks(commands: readonly string[], _retryTarget: Stage): Promise<AgentResult> {
     const summary = await runChecks(commands, this.deps.cwd);
     if (summary.passed) {
@@ -638,8 +651,9 @@ export class WorkflowEngine {
     // checks run here, narrow and quick, distinct from the full `test` tier (Testing stage) and
     // the heavy `premerge` tier (Awaiting Merge). A failure here is fixed in Development, same as
     // any other implementer failure — it self-loops via the same RETRYABLE_FAILURE routing.
-    if (this.deps.config.checks.fast.length > 0) {
-      const fastCheck = await this.executeChecks(this.deps.config.checks.fast, 'development');
+    const fastChecks = this.checksFor(ticket, 'fast');
+    if (fastChecks.length > 0) {
+      const fastCheck = await this.executeChecks(fastChecks, 'development');
       if (fastCheck.outcome !== 'SUCCESS') return fastCheck;
     }
 
@@ -791,7 +805,7 @@ export class WorkflowEngine {
         durationMs: 0,
       };
     }
-    const summary = await runChecks(this.deps.config.checks.premerge, this.deps.cwd);
+    const summary = await runChecks(this.checksFor(ticket, 'premerge'), this.deps.cwd);
     if (!summary.passed) {
       const failing = summary.results[summary.results.length - 1]!;
       return {

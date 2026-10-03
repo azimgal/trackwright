@@ -87,3 +87,28 @@ describe('runInit (CLI command)', () => {
     expect(occurrences).toBe(1);
   });
 });
+
+describe('checksBySpecialization', () => {
+  async function writeConfig(extra: string) {
+    await initConfig(dir, 'TW');
+    const base = await readFile(configPath(dir), 'utf8');
+    await writeFile(configPath(dir), `${base.replace(/^checksBySpecialization:.*$/m, '')}\n${extra}\n`, 'utf8');
+  }
+
+  it('defaults to an empty map so a single-stack project needs no change', async () => {
+    const config = await initConfig(dir, 'TW');
+    expect(config.checksBySpecialization).toEqual({});
+  });
+
+  it('accepts a partial per-specialization override (e.g. mobile.test only)', async () => {
+    await writeConfig('checksBySpecialization:\n  mobile:\n    test:\n      - "flutter test"');
+    const config = await loadConfig(dir);
+    expect(config.checksBySpecialization.mobile?.test).toEqual(['flutter test']);
+    expect(config.checksBySpecialization.mobile?.premerge).toBeUndefined();
+  });
+
+  it('rejects an unknown specialization key instead of silently ignoring a typo', async () => {
+    await writeConfig('checksBySpecialization:\n  mobil:\n    test:\n      - "flutter test"');
+    await expect(loadConfig(dir)).rejects.toThrow();
+  });
+});
