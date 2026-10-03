@@ -20,9 +20,10 @@ export async function runTicketShow(projectRoot: string, ticketId: string): Prom
     `${ticket.frontmatter.id}: ${ticket.frontmatter.title}`,
     `status=${ticket.frontmatter.status} stage=${ticket.frontmatter.stage ?? '-'} flow=${ticket.frontmatter.flow}`,
     `discipline=${ticket.frontmatter.discipline}${ticket.frontmatter.specialization ? '.' + ticket.frontmatter.specialization : ''}`,
-    ...(ticket.frontmatter.secondary_disciplines.length
-      ? [`secondary=${ticket.frontmatter.secondary_disciplines.join(',')}`]
+    ...(ticket.frontmatter.secondary_disciplines.length || ticket.frontmatter.secondary_specializations.length
+      ? [`secondary=${[...ticket.frontmatter.secondary_disciplines, ...ticket.frontmatter.secondary_specializations].join(',')}`]
       : []),
+    `design_status=${ticket.frontmatter.design_status}`,
     ...(ticket.frontmatter.dependencies.length ? [`depends_on=${ticket.frontmatter.dependencies.join(',')}`] : []),
     '',
     ...Object.entries(ticket.sections).map(([heading, body]) => `## ${heading}\n${body}\n`),

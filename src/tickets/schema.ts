@@ -53,6 +53,10 @@ export const ticketFrontmatterSchema = z
     discipline: z.enum(DISCIPLINES),
     specialization: z.union([z.enum(SPECIALIZATIONS), z.null()]).default(null),
     secondary_disciplines: z.array(z.enum(DISCIPLINES)).default([]),
+    // Additional development specializations this ticket also needs (e.g. a frontend-primary
+    // ticket that also changes the backend): each adds its own implementer to Development's
+    // fan-out, and its own checks/review requirements are unioned in. See policies/routing.ts.
+    secondary_specializations: z.array(z.enum(SPECIALIZATIONS)).default([]),
     dependencies: z.array(ticketIdSchema).default([]),
     // Declared path prefixes this ticket's implementation is expected to touch (e.g.
     // "src/routes/", "docs/"), used only by the batch scheduler (workflow/batch.ts) to decide

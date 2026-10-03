@@ -852,3 +852,68 @@ describe('failure outcomes through the engine', () => {
     expect(res.steps.at(-1)).toMatchObject({ fromStage: 'development', toStage: 'development', outcome: 'SYSTEM_ERROR' });
   });
 });
+
+/**
+ * Multi-discipline and design-only tickets, end to end through the real CLI human steps
+ * (`design approve`, `ticket waive`). The bundled visual verifier is an honest placeholder that
+ * always reports DESIGN_CONCERNS, so every design-gated ticket needs a human sign-off at
+ * Verification — that is the documented contract, exercised here rather than assumed.
+ */
+describe('multi-discipline and design-only tickets end to end', () => {
+  async function approveLatestDesign(id: string) {
+    const provider = new LocalDesignArtifactProvider(path.join(projectRoot, '.trackwright', 'design'));
+    const latest = await provider.getLatestForTicket(id);
+    await runDesignApprove(projectRoot, latest!.designId);
+  }
+
+  it('frontend + backend: fan-out to both implementers, then ONE review, ONE testing, ONE verification, Awaiting Merge, Done', async () => {
+    const t = newTicket({ id: 'TW-0080', title: 'fullstack', discipline: 'development', specialization: 'frontend', secondarySpecializations: ['backend'], context: 'c' });
+    await ticketStore.save(t);
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    const engine = await makeEngine(runner);
+
+    const first = await engine.run('TW-0080');
+    expect([first.stopReason, first.ticket.frontmatter.stage]).toEqual(['awaiting-human', 'design']); // frontend => design gate
+    await approveLatestDesign('TW-0080');
+
+    const second = await engine.run('TW-0080');
+    expect([second.stopReason, second.ticket.frontmatter.stage]).toEqual(['awaiting-human', 'verification']); // visual check: human
+    await runTicketWaive(projectRoot, 'TW-0080', 'visual check reviewed by a human');
+
+    const third = await engine.run('TW-0080');
+    expect(third.stopReason).toBe('done');
+
+    const names = runner.invocations.map((i) => i.agentName);
+    expect(names.filter((n) => n === 'implementer.frontend')).toHaveLength(1);
+    expect(names.filter((n) => n === 'implementer.backend')).toHaveLength(1);
+    expect(names.filter((n) => n === 'code-reviewer')).toHaveLength(1);
+    expect(names.filter((n) => n === 'verification-agent')).toHaveLength(1);
+    // fan-in: review only starts after both implementers have run
+    expect(names.indexOf('code-reviewer')).toBeGreaterThan(Math.max(names.indexOf('implementer.frontend'), names.indexOf('implementer.backend')));
+    const testing = await evidenceStore.historyForStage('TW-0080', 'testing');
+    expect(testing.filter((r) => r.outcome === 'SUCCESS')).toHaveLength(1);
+    const am = await evidenceStore.latestForStage('TW-0080', 'awaiting-merge');
+    expect(am?.mergeEligible).toBe(true);
+  });
+
+  it('a design-only ticket: no implementer, no code review agent, human design approval + sign-off, Done but not auto-merge-eligible', async () => {
+    const t = newTicket({ id: 'TW-0081', title: 'design only', discipline: 'design', context: 'c' });
+    await ticketStore.save(t);
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    const engine = await makeEngine(runner);
+
+    expect((await engine.run('TW-0081')).ticket.frontmatter.stage).toBe('design');
+    await approveLatestDesign('TW-0081');
+    expect((await engine.run('TW-0081')).ticket.frontmatter.stage).toBe('verification');
+    await runTicketWaive(projectRoot, 'TW-0081', 'design reviewed');
+    const done = await engine.run('TW-0081');
+
+    expect(done.stopReason).toBe('done');
+    expect(runner.invocations.map((i) => i.agentName)).toEqual(['planner']);
+    const am = await evidenceStore.latestForStage('TW-0081', 'awaiting-merge');
+    expect(am?.mergeEligible).toBe(false);
+    expect(am?.mergeReasons?.join(' ')).toContain('routing does not allow merge eligibility');
+  });
+});

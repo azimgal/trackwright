@@ -65,3 +65,10 @@ describe('deterministicDesignGate', () => {
     );
   });
 });
+
+describe('deterministicDesignGate with secondary specializations', () => {
+  it('a backend ticket that also touches the frontend is design-gated (union, not primary-only)', () => {
+    const t = newTicket({ id: 'TW-0002', title: 'x', discipline: 'development', specialization: 'backend', secondarySpecializations: ['frontend'], context: 'c' });
+    expect(deterministicDesignGate(t)).toBe('required');
+  });
+});

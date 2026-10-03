@@ -108,4 +108,21 @@ describe('runTicketCreate validation', () => {
     const a = await store.getOrThrow('TW-0001');
     expect(a.frontmatter.scope).toEqual(['src/routes/', 'docs/']);
   });
+
+  it('parses --secondary into secondary disciplines and specializations', async () => {
+    await runTicketCreate(projectRoot, { title: 'A', context: 'c', discipline: 'development', specialization: 'frontend', secondary: 'backend, design' });
+    const store = new TicketStore(path.join(projectRoot, '.trackwright', 'tickets'));
+    const a = await store.getOrThrow('TW-0001');
+    expect(a.frontmatter.secondary_specializations).toEqual(['backend']);
+    expect(a.frontmatter.secondary_disciplines).toEqual(['design']);
+  });
+
+  it('rejects an unknown --secondary item and one that duplicates the primary', async () => {
+    await expect(
+      runTicketCreate(projectRoot, { title: 'A', context: 'c', discipline: 'development', secondary: 'bogus' }),
+    ).rejects.toThrow(InvalidTicketCreateOptionsError);
+    await expect(
+      runTicketCreate(projectRoot, { title: 'A', context: 'c', discipline: 'development', specialization: 'backend', secondary: 'backend' }),
+    ).rejects.toThrow(/already the primary/);
+  });
 });

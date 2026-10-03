@@ -30,6 +30,7 @@ export function deterministicDesignGate(ticket: Ticket): DesignGateDecision {
   if (ticket.frontmatter.discipline === 'design') return 'required';
   if (ticket.frontmatter.secondary_disciplines.includes('design')) return 'required';
   if (ticket.frontmatter.specialization === 'frontend') return 'required';
+  if (ticket.frontmatter.secondary_specializations.includes('frontend')) return 'required';
 
   // Backend/infrastructure/mobile-with-no-UI-surface tickets are confidently not design work.
   if (ticket.frontmatter.discipline === 'infrastructure') return 'not-required';

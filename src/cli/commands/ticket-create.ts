@@ -18,6 +18,8 @@ export interface TicketCreateOptions {
   /** Comma-separated declared path prefixes, e.g. "src/routes/,docs/" — see
    * tickets/schema.ts's `scope` field doc comment. */
   scope?: string;
+  /** Comma-separated additional disciplines/specializations, e.g. "backend" or "design,backend". */
+  secondary?: string;
 }
 
 export class InvalidTicketCreateOptionsError extends Error {}
@@ -58,6 +60,37 @@ function assertFlow(value: string | undefined): FlowMode {
   return value as FlowMode;
 }
 
+/**
+ * `--secondary` items: a discipline (design | development | infrastructure) or a development
+ * specialization (frontend | backend | mobile). Each adds its own route to the ticket: another
+ * implementer in Development's fan-out, and its review/design/merge requirements unioned in.
+ */
+function parseSecondary(
+  value: string | undefined,
+  primary: { discipline: Discipline; specialization: Specialization | null },
+): { disciplines: Discipline[]; specializations: Specialization[] } {
+  const disciplines: Discipline[] = [];
+  const specializations: Specialization[] = [];
+  for (const item of parseCommaList(value)) {
+    if ((SPECIALIZATIONS as readonly string[]).includes(item)) {
+      if (primary.discipline === 'development' && primary.specialization === item) {
+        throw new InvalidTicketCreateOptionsError(`--secondary "${item}" is already the primary specialization`);
+      }
+      if (!specializations.includes(item as Specialization)) specializations.push(item as Specialization);
+    } else if ((DISCIPLINES as readonly string[]).includes(item)) {
+      if (item === primary.discipline) {
+        throw new InvalidTicketCreateOptionsError(`--secondary "${item}" is already the primary discipline`);
+      }
+      if (!disciplines.includes(item as Discipline)) disciplines.push(item as Discipline);
+    } else {
+      throw new InvalidTicketCreateOptionsError(
+        `--secondary items must be one of ${[...DISCIPLINES, ...SPECIALIZATIONS].join(', ')}, got "${item}"`,
+      );
+    }
+  }
+  return { disciplines, specializations };
+}
+
 function parseCommaList(value: string | undefined): string[] {
   if (!value) return [];
   return value
@@ -95,12 +128,16 @@ export async function runTicketCreate(projectRoot: string, options: TicketCreate
     }
   }
 
+  const specialization = assertSpecialization(options.specialization, discipline);
+  const secondary = parseSecondary(options.secondary, { discipline, specialization });
   const ticket = newTicket({
     id,
     title: options.title,
     context: options.context,
     discipline,
-    specialization: assertSpecialization(options.specialization, discipline),
+    specialization,
+    secondaryDisciplines: secondary.disciplines,
+    secondarySpecializations: secondary.specializations,
     flow: assertFlow(options.flow),
     dependencies,
     scope: parseCommaList(options.scope),

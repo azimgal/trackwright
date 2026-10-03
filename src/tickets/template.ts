@@ -7,6 +7,7 @@ export interface NewTicketInput {
   discipline: Discipline;
   specialization?: Specialization | null;
   secondaryDisciplines?: Discipline[];
+  secondarySpecializations?: Specialization[];
   flow?: FlowMode;
   context: string;
   dependencies?: string[];
@@ -26,6 +27,7 @@ export function newTicket(input: NewTicketInput): Ticket {
       discipline: input.discipline,
       specialization: input.specialization ?? null,
       secondary_disciplines: input.secondaryDisciplines ?? [],
+      secondary_specializations: input.secondarySpecializations ?? [],
       dependencies: input.dependencies ?? [],
       scope: input.scope ?? [],
       design_status: 'not-required',

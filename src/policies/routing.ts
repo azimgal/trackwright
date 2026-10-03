@@ -4,8 +4,10 @@ import type { Ticket } from '../tickets/schema.js';
 export interface RoutingEntry {
   readonly discipline: Discipline;
   readonly specialization: Specialization | null;
-  /** Agent name (matches an entry in agents/registry.ts) that runs the Development stage. */
-  readonly implementerAgent: string;
+  /** Agent name (matches an entry in agents/registry.ts) that runs the Development stage, or
+   * null when this routing produces no application code (design: its deliverable is the approved
+   * design artifact, produced and gated at the Design stage). */
+  readonly implementerAgent: string | null;
   readonly requiresCodeReview: boolean;
   readonly requiresDesignGateByDefault: boolean;
   readonly allowsAutoMergeEligibility: boolean;
@@ -20,7 +22,7 @@ export const ROUTING_TABLE: readonly RoutingEntry[] = [
   {
     discipline: 'design',
     specialization: null,
-    implementerAgent: 'design-gate', // design tickets produce/sync an artifact, not application code
+    implementerAgent: null, // design tickets produce/sync an artifact (Design stage), not application code
     requiresCodeReview: false,
     requiresDesignGateByDefault: true,
     allowsAutoMergeEligibility: false,
@@ -96,7 +98,10 @@ export function primaryRouting(ticket: Ticket): RoutingEntry {
  * side AND the design gate, even though design is not primary.
  */
 export function secondaryRoutings(ticket: Ticket): RoutingEntry[] {
-  return ticket.frontmatter.secondary_disciplines.map((d) => lookup(d, null));
+  return [
+    ...ticket.frontmatter.secondary_disciplines.map((d) => lookup(d, null)),
+    ...ticket.frontmatter.secondary_specializations.map((s) => lookup('development', s)),
+  ];
 }
 
 /** Union of implementer agents that must run in Development's fan-out for this ticket. */
@@ -104,7 +109,15 @@ export function implementerAgentsFor(ticket: Ticket): string[] {
   const primary = primaryRouting(ticket);
   const secondary = secondaryRoutings(ticket);
   const names = new Set([primary.implementerAgent, ...secondary.map((r) => r.implementerAgent)]);
-  return [...names];
+  names.delete(null);
+  // A generic development implementer adds nothing once a specialized one is already running.
+  if (names.size > 1) names.delete('implementer.generic');
+  return [...names] as string[];
+}
+
+/** Code review applies if any route (primary or secondary) requires it — unioned, never intersected. */
+export function requiresCodeReview(ticket: Ticket): boolean {
+  return [primaryRouting(ticket), ...secondaryRoutings(ticket)].some((r) => r.requiresCodeReview);
 }
 
 /**

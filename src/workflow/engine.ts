@@ -4,6 +4,7 @@ import { hasExceededCeiling } from '../policies/retry.js';
 import {
   allowsAutoMergeEligibility,
   implementerAgentsFor,
+  requiresCodeReview,
   requiresDesignGate,
 } from '../policies/routing.js';
 import { findClarificationMarkers, isPlanningComplete, DESIGN_STATUSES, type DesignStatus, type Ticket } from '../tickets/schema.js';
@@ -653,6 +654,10 @@ export class WorkflowEngine {
    */
   private async executeImplementer(ticket: Ticket): Promise<AgentResult> {
     const agentNames = implementerAgentsFor(ticket);
+    if (agentNames.length === 0) {
+      // Design-only routing: the deliverable is the approved design artifact (Design stage).
+      return { outcome: 'SUCCESS', summary: 'no code implementer for this routing (design-only ticket)', data: {}, durationMs: 0 };
+    }
     const priority: FailureOutcome[] = ['NEEDS_REPLAN', 'BLOCKED', 'RETRYABLE_FAILURE', 'SYSTEM_ERROR'];
     let worst: AgentResult | null = null;
 
@@ -741,6 +746,9 @@ export class WorkflowEngine {
    * one job.
    */
   private async executeCodeReview(ticket: Ticket): Promise<AgentResult> {
+    if (!requiresCodeReview(ticket)) {
+      return { outcome: 'SUCCESS', summary: 'code review not required by this ticket\'s routing (no code change)', data: {}, durationMs: 0 };
+    }
     const diff = await this.projectDiff();
     return this.executeClaudeAgent('code-reviewer', ticket, { diff }, 'code-review');
   }
@@ -783,17 +791,12 @@ export class WorkflowEngine {
   }
 
   private async executeVerification(ticket: Ticket): Promise<AgentResult> {
-    const diff = await this.projectDiff();
-    const testEvidence = await this.deps.evidenceStore.latestForStage(ticket.frontmatter.id, 'testing');
-    const result = await this.executeClaudeAgent(
-      'verification-agent',
-      ticket,
-      {
-        diff,
-        testEvidence: testEvidence ? JSON.stringify(testEvidence) : '(no testing evidence recorded)',
-      },
-      'verification',
-    );
+    // Design-only ticket: there is no code diff to verify — only the visual/design check below,
+    // which (with the bundled placeholder verifier) always asks a human to confirm.
+    const result =
+      implementerAgentsFor(ticket).length === 0
+        ? ({ outcome: 'SUCCESS', summary: 'design-only ticket: no code diff to verify', data: {}, durationMs: 0 } as AgentResult)
+        : await this.executeVerificationAgent(ticket);
     if (result.outcome !== 'SUCCESS' || !requiresDesignGate(ticket)) return result;
 
     // Design-sensitive ticket that otherwise passed verification: also run the visual check
@@ -817,6 +820,20 @@ export class WorkflowEngine {
       return { ...result, outcome: 'CONCERNS', summary: `visual check has concerns: ${check.summary}` };
     }
     return result;
+  }
+
+  private async executeVerificationAgent(ticket: Ticket): Promise<AgentResult> {
+    const diff = await this.projectDiff();
+    const testEvidence = await this.deps.evidenceStore.latestForStage(ticket.frontmatter.id, 'testing');
+    return this.executeClaudeAgent(
+      'verification-agent',
+      ticket,
+      {
+        diff,
+        testEvidence: testEvidence ? JSON.stringify(testEvidence) : '(no testing evidence recorded)',
+      },
+      'verification',
+    );
   }
 
   private async executeAwaitingMerge(ticket: Ticket): Promise<AgentResult> {
