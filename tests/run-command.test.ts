@@ -72,4 +72,13 @@ describe('runTicketRun branch safety', () => {
     expect((await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim()).toBe('trackwright/tw-0001');
     expect((await git(['rev-parse', 'main'])).stdout).toBe(mainBefore);
   });
+
+  it('an unknown ticket id fails before any git side effect (no stray branch)', async () => {
+    await initRepoOnBranch('main');
+    await initConfig(projectRoot, 'TW');
+    await expect(runTicketRun(projectRoot, 'TW-0404', { dryRun: true })).rejects.toThrow(/no ticket found/);
+    const { stdout } = await execFileAsync('git', ['branch', '--list'], { cwd: projectRoot });
+    expect(stdout).not.toContain('tw-0404');
+    expect(stdout).toContain('* main');
+  });
 });

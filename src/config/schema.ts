@@ -35,16 +35,15 @@ export const projectConfigSchema = z
      * within a wave — the safest possible default. See workflow/batch.ts. */
     maxParallel: z.number().int().positive().default(1),
     /**
-     * Default: false. `trackwright run` NEVER merges regardless of this setting — only an
-     * explicit, separate `trackwright ticket merge <id>` invocation ever does, and only when this
-     * is true AND every one of that command's own guards passes (see cli/commands/ticket-merge.ts).
-     * This is an opt-in switch for whether that command is even allowed to run at all, not a
-     * switch that makes merging happen automatically on its own.
+     * Reserved, and inert in this version: Trackwright has no merge command and never merges or
+     * pushes, whatever this is set to. Kept in the schema (default false) only so config files
+     * written by earlier `trackwright init` runs keep loading under the strict schema.
      */
     autoMerge: z.boolean().default(false),
-    /** Branch `ticket merge` merges into. Defaults to null, meaning "the first of main/master
-     * that exists" (the same candidates GitRepo.diffAgainstBase already uses) — set this
-     * explicitly for a project whose trunk isn't main/master (e.g. "dev"). */
+    /** The branch tickets are meant to be merged into. null (default) means "the first of
+     * main/master that exists". Used as the diff base for code review/verification, as the
+     * Awaiting Merge target-branch compatibility check, and protected like main/master (run/batch
+     * refuse to execute on it). Set it for a project whose trunk is e.g. "dev". */
     targetBranch: z.string().nullable().default(null),
   })
   .strict();

@@ -26,6 +26,9 @@ export async function runTicketRun(
   const evidenceStore = new EvidenceStore(path.join(projectRoot, config.evidenceDir));
   const gitRepo = new GitRepo(projectRoot);
 
+  // Unknown ticket id: fail before touching git at all (it used to create trackwright/<typo>).
+  await ticketStore.getOrThrow(ticketId);
+
   if (await gitRepo.isGitRepository()) {
     // The branch agents execute on is always checked, with or without --skip-branch: see the
     // doc comment on assertCurrentBranchIsSafeToRunOn for why this must never be skippable.
