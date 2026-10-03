@@ -738,3 +738,117 @@ describe('ticket status follows the done stage', () => {
     expect(result2.stopReason).toBe('done');
   });
 });
+
+/**
+ * Idempotency of `run`: re-invoking it must never redo a completed stage, add duplicate commits
+ * or evidence, reset a retry counter, or repeat an agent side effect.
+ */
+describe('run idempotency', () => {
+  async function gitLogCount() {
+    const { stdout } = await execFileAsync('git', ['rev-list', '--count', 'HEAD'], { cwd: projectRoot });
+    return Number(stdout.trim());
+  }
+
+  it('re-running a finished ticket is a no-op: no agent call, no commit, no evidence', async () => {
+    await createReadyTicket('TW-0060');
+    const first = new MockClaudeRunner();
+    first.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    expect((await (await makeEngine(first)).run('TW-0060')).stopReason).toBe('done');
+    const commits = await gitLogCount();
+    const evidence = (await evidenceStore.history('TW-0060')).length;
+
+    const second = new MockClaudeRunner();
+    const again = await (await makeEngine(second)).run('TW-0060');
+
+    expect(again.stopReason).toBe('done');
+    expect(again.steps).toHaveLength(0);
+    expect(second.callCount).toBe(0);
+    expect(await gitLogCount()).toBe(commits);
+    expect((await evidenceStore.history('TW-0060')).length).toBe(evidence);
+  });
+
+  it('an interrupted run resumes at the current stage — completed stages are never re-executed', async () => {
+    await createReadyTicket('TW-0061');
+    const first = new MockClaudeRunner();
+    first.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    const partial = await (await makeEngine(first)).run('TW-0061', { maxSteps: 4 }); // planning, architecture, design, ready -> now at development
+    expect(partial.stopReason).toBe('max-steps');
+    expect(partial.ticket.frontmatter.stage).toBe('development');
+
+    const second = new MockClaudeRunner();
+    const resumed = await (await makeEngine(second)).run('TW-0061');
+    expect(resumed.stopReason).toBe('done');
+    expect(second.invocations.map((i) => i.agentName)).toEqual(['implementer.backend', 'code-reviewer', 'verification-agent']);
+    expect(resumed.steps[0]!.fromStage).toBe('development');
+    // exactly one planning SUCCESS in the whole evidence log
+    const planning = await evidenceStore.historyForStage('TW-0061', 'planning');
+    expect(planning.filter((r) => r.outcome === 'SUCCESS')).toHaveLength(1);
+  });
+
+  it('re-running after the retry ceiling does not reset the counter or call the agent again', async () => {
+    await createReadyTicket('TW-0062');
+    const runner = new MockClaudeRunner();
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+    for (let i = 0; i < 5; i++) runner.enqueueFor('implementer.backend', { outcome: 'RETRYABLE_FAILURE', summary: 'nope', data: {}, durationMs: 1 });
+    const blocked = await (await makeEngine(runner)).run('TW-0062');
+    expect(blocked.stopReason).toBe('awaiting-human');
+    const implementerCalls = runner.invocations.filter((i) => i.agentName === 'implementer.backend').length;
+    expect(implementerCalls).toBe(3); // ceiling 3
+
+    const again = new MockClaudeRunner();
+    const rerun = await (await makeEngine(again)).run('TW-0062');
+    expect(rerun.stopReason).toBe('awaiting-human');
+    expect(again.callCount).toBe(0); // fails closed again, without spending another attempt
+    expect(rerun.steps[0]!.summary).toContain('retry ceiling');
+  });
+});
+
+/** The full failure taxonomy, end to end through the engine (not just the transition table). */
+describe('failure outcomes through the engine', () => {
+  async function atDevelopment(id: string, runner: MockClaudeRunner) {
+    await createReadyTicket(id);
+    runner.enqueueFor('planner', { outcome: 'SUCCESS', summary: 'ok', data: COMPLETE_PLAN_DATA, durationMs: 1 });
+  }
+  const r = (outcome: string, summary = outcome) => ({ outcome: outcome as never, summary, data: {}, durationMs: 1 });
+
+  it('NEEDS_CLARIFICATION from planning stops for a human at planning', async () => {
+    await createReadyTicket('TW-0070');
+    const runner = new MockClaudeRunner().enqueueFor('planner', r('NEEDS_CLARIFICATION'));
+    const res = await (await makeEngine(runner)).run('TW-0070');
+    expect([res.stopReason, res.ticket.frontmatter.stage]).toEqual(['awaiting-human', 'planning']);
+  });
+
+  it('NEEDS_REPLAN from development routes back to planning', async () => {
+    const runner = new MockClaudeRunner();
+    await atDevelopment('TW-0071', runner);
+    runner.enqueueFor('implementer.backend', r('NEEDS_REPLAN'));
+    const res = await (await makeEngine(runner)).run('TW-0071', { maxSteps: 5 });
+    expect(res.steps.at(-1)).toMatchObject({ fromStage: 'development', toStage: 'planning', outcome: 'NEEDS_REPLAN' });
+  });
+
+  it('BLOCKED from development stops for a human without advancing', async () => {
+    const runner = new MockClaudeRunner();
+    await atDevelopment('TW-0072', runner);
+    runner.enqueueFor('implementer.backend', r('BLOCKED'));
+    const res = await (await makeEngine(runner)).run('TW-0072');
+    expect([res.stopReason, res.ticket.frontmatter.stage]).toEqual(['awaiting-human', 'development']);
+  });
+
+  it('SYSTEM_ERROR retries, then fails closed at the ceiling (3)', async () => {
+    const runner = new MockClaudeRunner();
+    await atDevelopment('TW-0073', runner);
+    for (let i = 0; i < 5; i++) runner.enqueueFor('implementer.backend', r('SYSTEM_ERROR'));
+    const res = await (await makeEngine(runner)).run('TW-0073');
+    expect([res.stopReason, res.ticket.frontmatter.stage]).toEqual(['awaiting-human', 'development']);
+    expect(runner.invocations.filter((i) => i.agentName === 'implementer.backend')).toHaveLength(3);
+    expect(res.steps.at(-1)!.outcome).toBe('BLOCKED');
+  });
+
+  it('an outcome outside the agent\'s own contract is never trusted (treated as SYSTEM_ERROR)', async () => {
+    const runner = new MockClaudeRunner();
+    await atDevelopment('TW-0074', runner);
+    runner.enqueueFor('implementer.backend', r('CONCERNS')); // not an implementer outcome
+    const res = await (await makeEngine(runner)).run('TW-0074', { maxSteps: 5 });
+    expect(res.steps.at(-1)).toMatchObject({ fromStage: 'development', toStage: 'development', outcome: 'SYSTEM_ERROR' });
+  });
+});
