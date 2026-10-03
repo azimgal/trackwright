@@ -13,6 +13,7 @@ import { WorkflowEngine } from '../src/workflow/engine.js';
 import { newTicket } from '../src/tickets/template.js';
 import { defaultConfig } from '../src/config/defaults.js';
 import { runTicketWaive } from '../src/cli/commands/waive.js';
+import { runDesignApprove } from '../src/cli/commands/design.js';
 import { initConfig } from '../src/config/loader.js';
 
 const execFileAsync = promisify(execFile);
@@ -624,6 +625,21 @@ describe('design_status write-back', () => {
     expect(second.outcome).toBe('SUCCESS');
     const ticket = await ticketStore.getOrThrow('TW-0053');
     expect(ticket.frontmatter.design_status).toBe('synced');
+  });
+
+  it('the real `design approve` command produces a design the gate accepts, despite bookkeeping commits on HEAD', async () => {
+    await createTicket('TW-0055');
+    const engine = await makeEngine(new MockClaudeRunner());
+    await engine.step('TW-0055'); // drafts a design, BLOCKED — and commits the ticket-state change
+    const provider = new LocalDesignArtifactProvider(path.join(projectRoot, '.trackwright', 'design'));
+    const latest = await provider.getLatestForTicket('TW-0055');
+
+    await runDesignApprove(projectRoot, latest!.designId);
+    const second = await engine.step('TW-0055');
+
+    expect(second.summary).not.toContain('stale');
+    expect(second.outcome).toBe('SUCCESS');
+    expect((await ticketStore.getOrThrow('TW-0055')).frontmatter.design_status).toBe('synced');
   });
 
   it('sets design_status to "stale" when an approved design goes stale', async () => {

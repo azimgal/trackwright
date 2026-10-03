@@ -20,7 +20,11 @@ export function deterministicDesignGate(ticket: Ticket): DesignGateDecision {
   // lifecycle, purely because of which discipline happens to be set.
   if (ticket.frontmatter.design_status === 'pending') return 'required';
   if (ticket.frontmatter.design_status === 'failed') return 'required';
-  if (ticket.frontmatter.design_status === 'synced') return 'not-required'; // already satisfied
+  // 'synced' means a design gate applies and was satisfied — the engine still re-verifies the
+  // approved artifact is fresh (and re-confirms 'synced'). Returning 'not-required' here used to
+  // overwrite a human-approved 'synced' with 'not-required', which the Ready gate then rejected
+  // forever for design-gated routing ("design not synced").
+  if (ticket.frontmatter.design_status === 'synced') return 'required';
   if (ticket.frontmatter.design_status === 'stale') return 'required'; // needs re-sync
 
   if (ticket.frontmatter.discipline === 'design') return 'required';

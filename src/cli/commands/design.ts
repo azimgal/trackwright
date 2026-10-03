@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { loadConfig } from '../../config/loader.js';
+import { CONFIG_DIR, loadConfig } from '../../config/loader.js';
 import { TicketStore } from '../../tickets/store.js';
 import { LocalDesignArtifactProvider } from '../../design/local-provider.js';
 import { DesignNotFoundError } from '../../design/provider.js';
@@ -33,7 +33,10 @@ export async function runDesignApprove(projectRoot: string, designId: string): P
   const gitRepo = new GitRepo(projectRoot);
   let currentSha: string | null = null;
   try {
-    currentSha = await gitRepo.currentSha();
+    // Same SHA basis as the engine's staleness checks (engine.ts, safeSha): the last commit that
+    // touched the project, excluding Trackwright's own .trackwright/ bookkeeping. Raw HEAD is
+    // usually a ticket-state commit, which made every freshly approved design read as stale.
+    currentSha = await gitRepo.lastRelevantSha([CONFIG_DIR]);
   } catch {
     // no commits yet — reference SHA stays null, staleness-by-SHA simply won't trigger until one exists
   }

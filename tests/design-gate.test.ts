@@ -12,10 +12,10 @@ function ticket(overrides: Partial<Parameters<typeof newTicket>[0]> = {}) {
 }
 
 describe('deterministicDesignGate', () => {
-  it('an already-synced ticket is not-required (already satisfied)', () => {
+  it('an already-synced ticket still requires the gate, so the approved artifact is re-checked for freshness', () => {
     const t = ticket();
     t.frontmatter.design_status = 'synced';
-    expect(deterministicDesignGate(t)).toBe('not-required');
+    expect(deterministicDesignGate(t)).toBe('required');
   });
 
   it('an explicitly-stale ticket is required (needs re-sync)', () => {
