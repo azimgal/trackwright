@@ -76,12 +76,14 @@ classification. See `src/claude/runner.ts`.
 
 **Two implementation details learned empirically, not assumed:**
 
-- On Windows, the global `claude` binary is an npm `.cmd` shim — `child_process.spawn('claude', ...)`
-  cannot exec it without `shell: true` (it fails with `ENOENT` otherwise, even though the same name
-  resolves fine from an interactive shell). See the comment in `runner.ts`'s `runProcess` for the
-  trust-boundary reasoning (only hardcoded/filesystem-derived text ever reaches argv; ticket/diff
-  content always travels over stdin).
-- Passing the JSON-output contract only in `--system-prompt` is not reliably followed — real
+- On Windows, the global `claude` binary is an npm `.cmd` shim, which Node can only start through
+  `cmd.exe` — and Node's `shell: true` does not escape arguments, it only space-joins them (a tool
+  pattern like `Bash(git add*)` or a path with a space arrived split, and the multi-line system
+  prompt could not cross `cmd.exe` at all). `runner.ts` therefore resolves the binary itself: a
+  real `.exe` is started directly with no shell; a `.cmd`/`.bat` shim gets every argument
+  explicitly quoted and caret-escaped for `cmd.exe`. The system prompt is passed as a temporary file
+  (`--system-prompt-file`), and ticket/diff content only ever travels over stdin.
+- Passing the JSON-output contract only in the system prompt is not reliably followed — real
   invocations sometimes answered with a clarifying question instead of JSON. Every agent's task
   prompt (not just its system prompt) restates the exact JSON shape expected, concretely, right
   where generation starts — see `agents/registry.ts`'s `outputContract()` and how each
@@ -91,12 +93,15 @@ classification. See `src/claude/runner.ts`.
 ### Discipline routing
 
 Tickets are classified by `discipline` (`design` | `development` | `infrastructure`) and, for
-`development`, `specialization` (`frontend` | `backend` | `mobile` | `null`). A ticket may declare a
-`primary` discipline and `secondary` disciplines. Routing decides: which agent runs Development, what
-tests are required, whether a design gate applies, and what review policy applies
-(`src/policies/routing.ts`). Multi-discipline tickets fan out to multiple agents **only inside the
-Development stage**, then fan back in to a single Code Review / Testing / Verification pass. The
-pipeline stays linear and board-queryable; only Development internally parallelizes.
+`development`, `specialization` (`frontend` | `backend` | `mobile` | `null`). A ticket may also
+declare `secondary_disciplines` and `secondary_specializations` (`ticket create --secondary`).
+Routing decides: which implementer runs Development (none for `design`, whose deliverable is the
+approved design artifact), whether code review applies, whether a design gate applies, and whether
+the ticket may ever be claimed merge-eligible (`src/policies/routing.ts`); requirements are unioned
+across routes. Per-specialization check commands come from `checksBySpecialization`.
+Multi-discipline tickets fan out to multiple implementers **only inside the Development stage**,
+then fan back in to a single Code Review / Testing / Verification / Awaiting Merge pass. The
+pipeline stays linear; in this version the fan-out runs sequentially in one working tree.
 
 ### Awaiting Merge
 
@@ -107,8 +112,13 @@ Review/Testing, so that loop stays fast and a ticket sitting in Awaiting Merge d
 next ticket from starting Development. Checks are configured per-project as three tiers in
 `.trackwright/config.yaml`'s `checks` block — `checks.fast` (run at the end of Development, e.g.
 format/lint/typecheck), `checks.test` (run at Testing), `checks.premerge` (run here, at Awaiting
-Merge). Awaiting Merge runs `checks.premerge` and sets `merge_eligible: true` on success. The MVP
-computes eligibility; it does not perform an actual `git merge` by default (see Roadmap).
+Merge). Awaiting Merge, read-only and in order: re-checks verification staleness (project code
+changed -> back to Testing), dependencies (any no longer done -> BLOCKED), design sync (a
+design-gated ticket must still be synced to an approved artifact whose Requirements hash matches),
+target-branch compatibility (`targetBranch`, else main/master, advanced past this branch's base ->
+BLOCKED, with conflicting files from `git merge-tree`), then runs `checks.premerge`. The verdict is
+recorded on the evidence record as `mergeEligible` + `mergeReasons`. Trackwright computes
+eligibility; it never merges, pushes, fetches, or rebases.
 
 ### Verification, independent of implementation
 
@@ -134,17 +144,18 @@ retrying indefinitely or silently proceeding.
 
 ### Git safety
 
-The MVP never pushes to `main`/`master` directly, never force-pushes, and never resets or discards
-work it did not itself create in the current run. All work happens on a dedicated branch/worktree.
-PR creation is attempted only if GitHub auth is already configured; auto-merge is not enabled by
-default.
+Trackwright never pushes, force-pushes, merges, rebases, fetches, resets, or cleans — `GitRepo` has
+no method for any of them (enforced by a test). Agents only ever execute on a dedicated
+`trackwright/<id>` branch or batch worktree, never on `main`, `master`, or the configured
+`targetBranch`; starting a run from one of those is fine, since only the new branch is written to.
+Branch switches are refused over unrelated uncommitted work. There is no PR creation.
 
 ## What is explicitly out of MVP scope
 
 - A real `ModelProvider` abstraction for non-Claude backends (seam left, not built).
-- Full Design Sync (visual diff, staleness detection against a live design artifact). The
-  architecture reserves the extension point (`src/design/`); the MVP ships the interface and a stub,
-  not a working Claude-Design integration.
+- An external design provider and real visual diffing. Design Sync ships a local provider
+  (drafted artifacts, human approval, Requirements-hash staleness) and a placeholder visual
+  verifier that always asks a human; `src/design/` keeps the interfaces for a real one.
 - Real auto-merge execution. Awaiting Merge computes `merge_eligible`; a human or a later release
   performs the actual merge.
 - Any multi-provider abstraction, distributed scheduler, or production deployment tooling.

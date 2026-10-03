@@ -15,8 +15,8 @@ In scope:
   `awaiting-merge` as a real, checked stage.
 - `ClaudeRunner` with real headless Claude Code invocation, plus a `MockRunner` used by the test
   suite and available for CI/dogfood runs where no Claude credentials are configured.
-- Agents: `planner`, `implementer` (with `frontend`/`backend` variants where discipline routing
-  selects them), `code-reviewer`, `verification-agent`. Each with an explicit permission profile
+- Agents: `planner`, `implementer.{generic,frontend,backend,mobile,infrastructure}`,
+  `code-reviewer`, `verification-agent`, `design-gate-agent`. Each with an explicit permission profile
   (allowed/forbidden tools, read vs write).
 - Discipline/specialization routing table driving agent selection and required checks.
 - Evidence recording with SHA-based staleness detection.
@@ -31,16 +31,16 @@ Not in scope (explicitly deferred, see below):
 - Multi-provider `ModelProvider` abstraction.
 - Full Design Sync (Claude Design integration, live visual diffing).
 - Real auto-merge execution.
-- Distributed/parallel scheduling across multiple tickets (the dependency-wave concept from the
-  architecture notes is not implemented; only single-ticket, single-run execution).
+- Distributed scheduling. (`trackwright batch` does run dependency waves locally, with optional
+  scope-gated concurrency in git worktrees — but nothing beyond one machine and one invocation.)
 - A hosted/service deployment of any kind. This is a CLI you run in your own repository.
 
 ## After MVP (indicative, not committed)
 
 1. **Design Sync** — wire `src/design/` to a real design-artifact source and a visual-diff check,
    behind the same `design-gate`/`design-sync` stage boundary already reserved in the state machine.
-2. **Dependency waves** — parallel execution of independent, `ready` tickets, building on the
-   already-declared `dependencies` field.
+2. **Parallel fan-out inside Development** — run a multi-route ticket's implementers concurrently
+   (dependency waves across tickets already exist via `trackwright batch`).
 3. **Policy-engine-gated auto-merge** — a narrowly-scoped, opt-in path to real automated merging for
    low-risk ticket classes only, with the same fail-closed defaults as everything else in this
    project.
