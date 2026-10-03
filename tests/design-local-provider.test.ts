@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { LocalDesignArtifactProvider } from '../src/design/local-provider.js';
@@ -129,5 +129,20 @@ describe('LocalDesignArtifactProvider', () => {
 
     const afterSecond = await provider.recordVisualCheck(created.designId, check2);
     expect(afterSecond.visualChecks).toEqual([check1, check2]);
+  });
+});
+
+describe('LocalDesignArtifactProvider path safety', () => {
+  it('treats a path-traversal design id as not found instead of reading/writing outside the design dir', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tw-design-trav-'));
+    const designDir = path.join(dir, 'design');
+    await writeFile(path.join(dir, 'victim.json'), JSON.stringify({ designId: 'x', status: 'draft' }), 'utf8');
+    const p = new LocalDesignArtifactProvider(designDir);
+    for (const id of ['../victim', '..\victim', '/etc/passwd', 'a/b']) {
+      expect(await p.getDesign(id)).toBeNull();
+      await expect(p.approve(id)).rejects.toThrow(DesignNotFoundError);
+    }
+    expect(JSON.parse(await readFile(path.join(dir, 'victim.json'), 'utf8')).status).toBe('draft');
+    await rm(dir, { recursive: true, force: true });
   });
 });

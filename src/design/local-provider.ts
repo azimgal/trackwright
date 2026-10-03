@@ -65,6 +65,9 @@ export class LocalDesignArtifactProvider implements DesignProvider {
   }
 
   async getDesign(designId: string): Promise<DesignArtifact | null> {
+    // designId arrives from the CLI (`design approve/show <id>`): never let it become a path
+    // outside designDir (e.g. "../../config"). Real ids are UUIDs minted by createOrUpdateDesign.
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(designId)) return null;
     const file = this.jsonPath(designId);
     if (!existsSync(file)) return null;
     const raw = await readFile(file, 'utf8');
