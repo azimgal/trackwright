@@ -27,15 +27,18 @@ export async function runTicketRun(
   const gitRepo = new GitRepo(projectRoot);
 
   if (await gitRepo.isGitRepository()) {
-    // Always enforced, even with --skip-branch: see the doc comment on
-    // assertCurrentBranchIsSafeToRunOn for why this specific check must never be skippable.
-    await assertCurrentBranchIsSafeToRunOn(gitRepo);
-    if (!options.skipBranch) {
+    // The branch agents execute on is always checked, with or without --skip-branch: see the
+    // doc comment on assertCurrentBranchIsSafeToRunOn for why this must never be skippable.
+    // ensureWorkBranch performs it on the ticket branch it switches to.
+    const extraProtected = config.targetBranch ? [config.targetBranch] : [];
+    if (options.skipBranch) {
+      await assertCurrentBranchIsSafeToRunOn(gitRepo, extraProtected);
+    } else {
       // Everything under .trackwright/ (config, tickets, evidence) is Trackwright's own
       // bookkeeping — a ticket just created by `ticket create` is normal, expected uncommitted
       // content at this point. Only *unrelated* uncommitted work should trip
       // UncommittedChangesError.
-      await ensureWorkBranch(gitRepo, ticketId, [CONFIG_DIR]);
+      await ensureWorkBranch(gitRepo, ticketId, [CONFIG_DIR], extraProtected);
     }
   }
 

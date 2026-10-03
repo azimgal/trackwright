@@ -57,4 +57,19 @@ describe('runTicketRun branch safety', () => {
     const result = await runTicketRun(projectRoot, 'TW-0001', { dryRun: true, skipBranch: true, maxSteps: 3 });
     expect(result.steps.length).toBeGreaterThan(0);
   });
+
+  it('a fresh repo on main works out of the box: run creates the ticket branch, main is never written to', async () => {
+    await initRepoOnBranch('main');
+    const config = await initConfig(projectRoot, 'TW');
+    const store = new TicketStore(path.join(projectRoot, config.ticketsDir));
+    await store.save(newTicket({ id: 'TW-0001', title: 'x', discipline: 'development', specialization: 'backend', context: 'c' }));
+    const git = (args: string[]) => execFileAsync('git', args, { cwd: projectRoot });
+    const mainBefore = (await git(['rev-parse', 'main'])).stdout;
+
+    const result = await runTicketRun(projectRoot, 'TW-0001', { dryRun: true, maxSteps: 3 });
+
+    expect(result.steps.length).toBeGreaterThan(0);
+    expect((await git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim()).toBe('trackwright/tw-0001');
+    expect((await git(['rev-parse', 'main'])).stdout).toBe(mainBefore);
+  });
 });

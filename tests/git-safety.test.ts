@@ -76,6 +76,21 @@ describe('assertCurrentBranchIsSafeToRunOn', () => {
     await expect(assertCurrentBranchIsSafeToRunOn(repo)).rejects.toThrow('refusing to run on protected branch "main"');
   });
 
+  it('treats the configured targetBranch (e.g. "dev") as protected too', async () => {
+    await initRepoOnBranch('dev');
+    const repo = new GitRepo(dir);
+    await expect(assertCurrentBranchIsSafeToRunOn(repo, ['dev'])).rejects.toThrow('refusing to run on protected branch "dev"');
+  });
+
+  it('starting from a protected branch is fine: the ticket branch is created and execution happens there', async () => {
+    await initRepoOnBranch('main');
+    const repo = new GitRepo(dir);
+    const before = await repo.currentSha();
+    await expect(ensureWorkBranch(repo, 'TW-0001')).resolves.toBe('trackwright/tw-0001');
+    expect(await repo.currentBranch()).toBe('trackwright/tw-0001');
+    expect((await execFileAsync('git', ['rev-parse', 'main'], { cwd: dir })).stdout.trim()).toBe(before);
+  });
+
   it('allows running on a non-protected branch', async () => {
     await initRepoOnBranch('dev');
     const repo = new GitRepo(dir);
@@ -143,7 +158,7 @@ describe('ensureWorkBranch uncommitted-changes guard', () => {
 describe('GitRepo has no destructive or network-mutating capability at all', () => {
   it('exposes no push, reset, or clean method', () => {
     const repo = new GitRepo('.');
-    for (const method of ['push', 'reset', 'forcePush', 'clean', 'resetHard']) {
+    for (const method of ['push', 'reset', 'forcePush', 'clean', 'resetHard', 'merge', 'rebase', 'fetch', 'deleteBranch']) {
       expect((repo as unknown as Record<string, unknown>)[method]).toBeUndefined();
     }
   });

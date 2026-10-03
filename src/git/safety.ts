@@ -24,12 +24,15 @@ export class UncommittedChangesError extends Error {
   }
 }
 
-export function isProtectedBranch(branch: string): boolean {
-  return (PROTECTED_BRANCHES as readonly string[]).includes(branch);
+/** `extra` adds project-specific protected branches — the configured `targetBranch` (e.g.
+ * "dev") is always passed here by callers, since committing straight onto the branch a ticket is
+ * meant to be merged into is exactly the direct-to-trunk write this guard exists to prevent. */
+export function isProtectedBranch(branch: string, extra: readonly string[] = []): boolean {
+  return (PROTECTED_BRANCHES as readonly string[]).includes(branch) || extra.includes(branch);
 }
 
-export function assertNotProtectedBranch(branch: string, action: string): void {
-  if (isProtectedBranch(branch)) {
+export function assertNotProtectedBranch(branch: string, action: string, extra: readonly string[] = []): void {
+  if (isProtectedBranch(branch, extra)) {
     throw new ProtectedBranchError(branch, action);
   }
 }
@@ -51,9 +54,9 @@ export function workBranchName(ticketId: string): string {
  * exists for users who already manage their own branching — not as a way to let an agent commit
  * directly to main/master by passing one extra flag.
  */
-export async function assertCurrentBranchIsSafeToRunOn(repo: GitRepo): Promise<void> {
+export async function assertCurrentBranchIsSafeToRunOn(repo: GitRepo, extraProtected: readonly string[] = []): Promise<void> {
   const current = await repo.currentBranch();
-  assertNotProtectedBranch(current, 'run on');
+  assertNotProtectedBranch(current, 'run on', extraProtected);
 }
 
 /**
@@ -72,16 +75,22 @@ export async function assertCurrentBranchIsSafeToRunOn(repo: GitRepo): Promise<v
  * commit). Checking out the branch you're already on is a pure no-op for git, so there is nothing
  * for the uncommitted-changes guard to protect against in that case; applying it anyway meant a
  * ticket resumed mid-run could never get past this check at all.
+ *
+ * Starting FROM a protected branch is fine (a fresh repo is on main/master, and `ticket create`
+ * leaves you there): creating and switching to the ticket branch writes nothing to the protected
+ * branch. What is never allowed is *executing* on one — so the protected-branch check runs on
+ * the branch this function leaves checked out, every time, before any agent can act.
  */
 export async function ensureWorkBranch(
   repo: GitRepo,
   ticketId: string,
   ignorePathPrefixes: readonly string[] = [],
+  extraProtected: readonly string[] = [],
 ): Promise<string> {
   const branch = workBranchName(ticketId);
-  await assertCurrentBranchIsSafeToRunOn(repo);
 
   if ((await repo.currentBranch()) === branch) {
+    await assertCurrentBranchIsSafeToRunOn(repo, extraProtected);
     return branch;
   }
 
@@ -94,6 +103,7 @@ export async function ensureWorkBranch(
   } else {
     await repo.createBranch(branch);
   }
+  await assertCurrentBranchIsSafeToRunOn(repo, extraProtected);
   return branch;
 }
 

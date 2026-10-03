@@ -202,9 +202,11 @@ async function runEngineAt(
   const gitRepo = new GitRepo(gitCwd);
 
   if (await gitRepo.isGitRepository()) {
-    await assertCurrentBranchIsSafeToRunOn(gitRepo);
+    const extraProtected = config.targetBranch ? [config.targetBranch] : [];
     if (branchOpts.createBranch) {
-      await ensureWorkBranch(gitRepo, ticketId, [CONFIG_DIR]);
+      await ensureWorkBranch(gitRepo, ticketId, [CONFIG_DIR], extraProtected); // asserts the branch it lands on
+    } else {
+      await assertCurrentBranchIsSafeToRunOn(gitRepo, extraProtected);
     }
     // Worktree case: addWorktree already checked out the ticket's own branch directly into this
     // tree — nothing further to do, and ensureWorkBranch's own clean-tree guard would be
