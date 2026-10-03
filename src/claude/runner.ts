@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { AgentInvocation, AgentResult, ClaudeRunner } from './types.js';
 
 /**
@@ -20,7 +24,7 @@ interface ClaudeJsonEnvelope {
 /**
  * Real ClaudeRunner: spawns a fresh, isolated `claude -p` process per invocation (no persistent
  * conversation, no shared context between stages — see docs/architecture.md, "Claude Runner").
- * The task prompt is sent over stdin. The system prompt is passed via `--system-prompt`, which
+ * The task prompt is sent over stdin. The system prompt is passed via `--system-prompt-file`, which
  * *fully replaces* Claude Code's own default system prompt (not `--append-system-prompt`) — see
  * `buildArgs()` below and docs/architecture.md's "learned empirically" note for why: appending to
  * the default interactive-assistant framing was not reliably strict enough to stop the model
@@ -32,19 +36,26 @@ export class ClaudeCliRunner implements ClaudeRunner {
   constructor(private readonly binary: string = 'claude') {}
 
   async invoke(invocation: AgentInvocation): Promise<AgentResult> {
-    const args = this.buildArgs(invocation);
     const start = Date.now();
 
     let stdout: string;
     let stderr: string;
     let timedOut = false;
+    // The system prompt travels via a temp file (--system-prompt-file), never as an argv element:
+    // it is multi-line text, and on Windows a newline cannot survive a cmd.exe command line at
+    // all (it terminates the command). See runProcess for the rest of the Windows argv contract.
+    const promptDir = await mkdtemp(path.join(tmpdir(), 'trackwright-sp-'));
     try {
-      const result = await this.runProcess(args, invocation);
+      const systemPromptFile = path.join(promptDir, 'system-prompt.txt');
+      await writeFile(systemPromptFile, invocation.systemPrompt, 'utf8');
+      const result = await this.runProcess(this.buildArgs(invocation, systemPromptFile), invocation);
       stdout = result.stdout;
       stderr = result.stderr;
       timedOut = result.timedOut;
     } catch (err) {
       return this.systemError(`failed to spawn claude: ${(err as Error).message}`, Date.now() - start);
+    } finally {
+      await rm(promptDir, { recursive: true, force: true }).catch(() => undefined);
     }
 
     if (timedOut) {
@@ -129,7 +140,8 @@ export class ClaudeCliRunner implements ClaudeRunner {
     };
   }
 
-  private buildArgs(invocation: AgentInvocation): string[] {
+  /** Exposed for tests (argv contract); not part of the public ClaudeRunner interface. */
+  buildArgs(invocation: AgentInvocation, systemPromptFile: string): string[] {
     const args = [
       '-p',
       '--output-format',
@@ -147,9 +159,9 @@ export class ClaudeCliRunner implements ClaudeRunner {
       // structured-output agent calls, not an interactive coding session, so the default framing
       // is actively counterproductive here. This does not weaken tool-permission enforcement:
       // --allowedTools/--disallowedTools are a separate, independently-enforced mechanism, not
-      // part of the system prompt text.
-      '--system-prompt',
-      invocation.systemPrompt,
+      // part of the system prompt text. Passed as a file path, not inline text: see invoke().
+      '--system-prompt-file',
+      systemPromptFile,
     ];
     if (invocation.allowedTools.length > 0) {
       args.push('--allowedTools', ...invocation.allowedTools);
@@ -165,19 +177,19 @@ export class ClaudeCliRunner implements ClaudeRunner {
     invocation: AgentInvocation,
   ): Promise<{ stdout: string; stderr: string; timedOut: boolean }> {
     return new Promise((resolve, reject) => {
-      const child = spawn(this.binary, args, {
+      const { command, spawnArgs, useShell } = resolveSpawn(this.binary, args);
+      const child = spawn(command, spawnArgs, {
         cwd: invocation.cwd,
         timeout: invocation.timeoutMs,
         windowsHide: true,
-        // Windows-first-class requirement: a global npm binary like `claude` resolves to a
-        // `.cmd` shim, which Node's spawn() cannot exec directly without a shell (ENOENT
-        // otherwise, even though the same name resolves fine from an interactive shell). Node
-        // itself warns that args are not fully escaped under shell:true — the trust boundary
-        // that makes this acceptable here is that every argv entry passed to buildArgs() is
-        // either this process's own hardcoded template text (model name, agent system prompt)
-        // or a filesystem path (cwd) never ticket/ user content. Ticket and diff content only
-        // ever travels over stdin (see the prompt write below), never as an argv element.
-        shell: process.platform === 'win32',
+        // Windows-first-class requirement: a global npm binary like `claude` resolves to a `.cmd`
+        // shim, which Node's spawn() cannot exec without a shell. Node does NOT escape argv under
+        // shell:true (it only space-joins), so a tool pattern like `Bash(git add*)` or a project
+        // path containing spaces/`&`/`%` used to be split or reinterpreted by cmd.exe — see
+        // resolveSpawn/quoteForCmd below, which escape every argument explicitly instead.
+        // Ticket and diff content never travels as argv at all — only over stdin (see below).
+        shell: useShell,
+        windowsVerbatimArguments: useShell,
       });
 
       let stdout = '';
@@ -208,4 +220,54 @@ export class ClaudeCliRunner implements ClaudeRunner {
       child.stdin.end();
     });
   }
+}
+
+// cmd.exe metacharacters (the same set cross-spawn escapes). Inside a batch shim's `%*` the
+// command line is parsed by cmd a second time, so arguments bound for a .cmd/.bat are
+// caret-escaped twice — verified empirically against an npm-style shim (spaces, quotes, `&`, `|`,
+// `<`, `>`, `%VAR%`, `!`, `^`, parentheses, trailing backslashes, non-ASCII all round-trip).
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+/** MSVCRT-style quoting, then cmd.exe caret-escaping (twice for a batch-file target). */
+export function quoteForCmd(arg: string, isBatchFile: boolean): string {
+  let quoted = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, '$1$1');
+  quoted = `"${quoted}"`.replace(CMD_META, '^$1');
+  return isBatchFile ? quoted.replace(CMD_META, '^$1') : quoted;
+}
+
+/** Resolve a bare command name against PATH/PATHEXT the way cmd.exe would (Windows only). */
+function resolveWindowsCommand(binary: string): string | null {
+  if (path.extname(binary) && existsSync(binary)) return binary;
+  const exts = (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+  const hasDir = binary.includes('/') || binary.includes('\\');
+  const dirs = hasDir ? [''] : (process.env.PATH ?? process.env.Path ?? '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of path.extname(binary) ? [''] : exts) {
+      const candidate = path.join(dir, binary + ext.toLowerCase());
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * How to spawn `binary` with `args` safely on this platform. POSIX: direct exec, no shell, argv
+ * passed as-is. Windows: a real executable (.exe/.com) is also exec'd directly with no shell;
+ * anything else (an npm .cmd shim, or an unresolvable name left for cmd.exe to report) goes
+ * through cmd.exe with every argument explicitly escaped — never Node's unescaped shell join.
+ */
+export function resolveSpawn(
+  binary: string,
+  args: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): { command: string; spawnArgs: string[]; useShell: boolean } {
+  if (platform !== 'win32') return { command: binary, spawnArgs: [...args], useShell: false };
+  const resolved = resolveWindowsCommand(binary);
+  if (resolved && /\.(exe|com)$/i.test(resolved)) {
+    return { command: resolved, spawnArgs: [...args], useShell: false };
+  }
+  const target = resolved ?? binary;
+  const isBatchFile = /\.(cmd|bat)$/i.test(target);
+  const commandLine = [target.replace(CMD_META, '^$1'), ...args.map((a) => quoteForCmd(a, isBatchFile))].join(' ');
+  return { command: commandLine, spawnArgs: [], useShell: true };
 }
